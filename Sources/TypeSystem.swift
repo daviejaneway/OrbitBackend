@@ -236,7 +236,7 @@ public class TypeResolver : CompilationPhase {
     var expressionTypeMap : [Int : TypeProtocol] = [:]
     
     
-    init() {
+    public init() {
         self.declaredTypes["Int"] = ValueType.IntType
         self.declaredTypes["Real"] = ValueType.RealType
         
