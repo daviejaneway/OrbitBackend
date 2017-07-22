@@ -11,22 +11,28 @@ class OrbitBackendTests: XCTestCase {
         
         let tokens = try! lexer.execute(input:
             "api Test " +
-                "type Foo() " +
+                "type Main() " +
                 
-                "(self Foo) bar (x Int) (Int) " +
-                    "return x * 2 " +
+                "(Main) main (x Int) (Int) " +
+                    "return x + x " +
                 "... " +
             "... ")
         
         do {
             let expr = try parser.execute(input: tokens)
-            let result = try tr.execute(input: expr)
+            let tm = try tr.execute(input: expr)
             
-            print(result)
+            let api = expr.body[0] as! APIExpression
+            let gen = LLVMGenerator(apiName: api.name.value)
+            let result = try gen.execute(input: (typeMap: tm, ast: api))
+            
+            result.dump()
+            
+            try result.verify()
         } catch let ex as OrbitError {
             print(ex.message)
-        } catch {
-            
+        } catch let ex {
+            print(ex)
         }
     }
 }

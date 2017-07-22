@@ -9,6 +9,7 @@
 import Foundation
 import OrbitCompilerUtils
 import OrbitFrontend
+import LLVM
 
 extension OrbitError {
     static func unresolvableExpression(expression: Expression) -> OrbitError {
@@ -22,23 +23,43 @@ func ==(lhs: TypeProtocol, rhs: TypeProtocol) -> Bool {
 
 public protocol TypeProtocol {
     var name: String { get }
+    var scope: Scope { get }
+}
+
+extension TypeProtocol {
+    
+    func absoluteName() throws -> String {
+        return try self.scope.absolutise(relativeName: self.name)
+    }
+    
+    func fullName() throws -> Name {
+        return try Name(relativeName: self.name, absoluteName: self.absoluteName())
+    }
+}
+
+extension Expression {
+    func assignType(type: TypeProtocol, env: TypeResolver) {
+        env.expressionTypeMap[self.hashValue] = type
+    }
 }
 
 public class UnitType : TypeProtocol {
     public let name: String
+    public let scope: Scope
     
-    public init(name: String) {
+    public init(name: String, scope: Scope) {
         self.name = name
+        self.scope = scope
     }
 }
 
 class ListType : UnitType {
     public let elementType: TypeProtocol
     
-    public init(elementType: TypeProtocol) {
+    public init(elementType: TypeProtocol, scope: Scope) {
         self.elementType = elementType
         
-        super.init(name: elementType.name)
+        super.init(name: elementType.name, scope: scope)
     }
 }
 
@@ -49,12 +70,30 @@ public struct SignatureType : CompoundType {
     public let argumentTypes: [TypeProtocol]
     public let returnType: TypeProtocol?
     public let name: String
+    public let scope: Scope
     
-    init(receiverType: TypeProtocol, argumentTypes: [TypeProtocol], returnType: TypeProtocol?) {
+    init(receiverType: TypeProtocol, argumentTypes: [TypeProtocol], returnType: TypeProtocol?, scope: Scope) {
         self.receiverType = receiverType
         self.argumentTypes = argumentTypes
         self.returnType = returnType
         self.name = "(\(receiverType.name))(\(argumentTypes.map { $0.name }.joined(separator: ",")))(\(returnType?.name ?? ""))"
+        self.scope = scope
+    }
+}
+
+public struct BinaryOperatorType : CompoundType {
+    public let leftType: TypeProtocol
+    public let rightType: TypeProtocol
+    public let op: Operator
+    public let scope: Scope
+    public let name: String
+    
+    init(leftType: TypeProtocol, rightType: TypeProtocol, op: Operator, scope: Scope) {
+        self.leftType = leftType
+        self.rightType = rightType
+        self.op = op
+        self.scope = scope
+        self.name = op.symbol
     }
 }
 
@@ -63,21 +102,44 @@ public protocol StatementType : TypeProtocol {}
 public struct TypeDefType : StatementType {
     public let name: String
     public let propertyTypes: [TypeProtocol]
+    public let scope: Scope
+}
+
+public enum ScopeType {
+    case TopLevel
+    case API(apiName: String)
+    case Method
 }
 
 public class Scope {
-    public static let programScope = Scope(enclosingScope: nil)
+    public static let programScope = Scope(enclosingScope: nil, scopeType: .TopLevel)
     
     private(set) public var bindings: [String : TypeProtocol] = [:]
+    private(set) public var variables: [String : IRBinding] = [:]
     
-    public let enclosingScope: Scope!
+    public var enclosingScope: Scope?
+    public let scopeType: ScopeType
     
     private init() {
         self.enclosingScope = Scope.programScope
+        self.scopeType = .TopLevel
     }
     
-    public init(enclosingScope: Scope? = nil) {
+    public init(enclosingScope: Scope? = nil, scopeType: ScopeType) {
         self.enclosingScope = enclosingScope
+        self.scopeType = scopeType
+    }
+    
+    public func absolutise(relativeName: String) throws -> String {
+        if case let ScopeType.API(apiName) = self.scopeType {
+            return "\(Mangler.mangle(name: apiName)).\(relativeName)"
+        }
+        
+        guard let parent = self.enclosingScope else {
+            return relativeName
+        }
+        
+        return try parent.absolutise(relativeName: relativeName)
     }
     
     public func bind(name: String, type: TypeProtocol) throws {
@@ -86,18 +148,26 @@ public class Scope {
         self.bindings[name] = type
     }
     
+    public func defineVariable(named: String, binding: IRBinding) throws {
+        guard !self.variables.keys.contains(named) else { throw OrbitError(message: "Attempting to redefine variable \(named)") }
+        
+        self.variables[named] = binding
+    }
+    
     public func lookupBinding(named: String) throws -> TypeProtocol {
         guard let type = self.bindings[named] else { throw OrbitError(message: "Binding '\(named)' does not exist in the current scope") }
         
         return type
     }
+    
+    public func lookupVariable(named: String) throws -> IRBinding {
+        guard let variable = self.variables[named] else { throw OrbitError(message: "Variable '\(named)' does not exist in the current scope") }
+        
+        return variable
+    }
 }
 
-protocol ScopeAware {
-    var scope: Scope { get }
-}
-
-public struct MethodType : StatementType, ScopeAware {
+public struct MethodType : StatementType {
     public let name: String
     public let signatureType: SignatureType
     public let scope: Scope
@@ -105,11 +175,11 @@ public struct MethodType : StatementType, ScopeAware {
     public init(name: String, signatureType: SignatureType, enclosingScope: Scope) {
         self.name = name
         self.signatureType = signatureType
-        self.scope = Scope(enclosingScope: enclosingScope)
+        self.scope = Scope(enclosingScope: enclosingScope, scopeType: .Method)
     }
 }
 
-public struct APIType : CompoundType, ScopeAware {
+public struct APIType : CompoundType {
     public var exportableTypes: [TypeProtocol]
     public let name: String
     public let scope: Scope
@@ -117,7 +187,7 @@ public struct APIType : CompoundType, ScopeAware {
     init(name: String, exportableTypes: [StatementType] = []) {
         self.name = name
         self.exportableTypes = exportableTypes
-        self.scope = Scope(enclosingScope: Scope.programScope)
+        self.scope = Scope(enclosingScope: Scope.programScope, scopeType: .API(apiName: name))
     }
     
     public func qualifyName(name: String) -> String {
@@ -125,7 +195,7 @@ public struct APIType : CompoundType, ScopeAware {
     }
 }
 
-public struct ProgramType : CompoundType, ScopeAware {
+public struct ProgramType : CompoundType {
     public let topLevelTypes: [TypeProtocol]
     public let name: String = "Program"
     public let scope = Scope.programScope
@@ -133,17 +203,23 @@ public struct ProgramType : CompoundType, ScopeAware {
 
 public struct VoidType : TypeProtocol {
     public var name: String = "Void"
+    public let scope: Scope
 }
 
 public struct Anything : TypeProtocol {
-    public static let shared = Anything()
+    public static let shared = Anything(name: "Any", scope: Scope.programScope)
     
     public var name: String = "Any"
+    public let scope: Scope
 }
 
 public struct ValueType : TypeProtocol {
+    public static let IntType = ValueType(name: "Int", width: MemoryLayout<Int>.size * 8, scope: Scope.programScope)
+    public static let RealType = ValueType(name: "Real", width: MemoryLayout<Double>.size * 8, scope: Scope.programScope)
+    
     public var name: String
     public let width: Int
+    public let scope: Scope
 }
 
 /**
@@ -153,13 +229,18 @@ public struct ValueType : TypeProtocol {
  */
 public class TypeResolver : CompilationPhase {
     public typealias InputType = RootExpression
-    public typealias OutputType = ProgramType
+    public typealias OutputType = [Int : TypeProtocol]
     
-    var declaredTypes: [String : TypeProtocol] = [:]
+    private(set) var declaredTypes: [String : TypeProtocol] = [:]
+    private(set) var declaredOperatorTypes: [String : TypeProtocol] = [:] // operator name against its return type
+    var expressionTypeMap : [Int : TypeProtocol] = [:]
+    
     
     init() {
-        self.declaredTypes["Orb::Core::Int"] = ValueType(name: "Orb::Core::Int", width: MemoryLayout<Int>.size)
-        self.declaredTypes["Orb::Core::Real"] = ValueType(name: "Orb::Core::Real", width: MemoryLayout<Double>.size)
+        self.declaredTypes["Int"] = ValueType.IntType
+        self.declaredTypes["Real"] = ValueType.RealType
+        
+        self.declaredOperatorTypes["Int.+.Int"] = ValueType.IntType
     }
     
     func declareType(name: String, type: TypeProtocol, enclosingAPI: APIType) throws {
@@ -172,8 +253,8 @@ public class TypeResolver : CompilationPhase {
     func lookupType(name: String, enclosingAPI: APIType) throws -> TypeProtocol {
         // TODO - Remove the special cases once imports & built-in types are working
         switch name {
-            case "Int": return self.declaredTypes["Orb::Core::Int"]!
-            case "Real": return self.declaredTypes["Orb::Core::Real"]!
+            case "Int": return self.declaredTypes["Int"]!
+            case "Real": return self.declaredTypes["Real"]!
             
             default:
                 guard let type = self.declaredTypes[enclosingAPI.qualifyName(name: name)] else {
@@ -187,36 +268,49 @@ public class TypeResolver : CompilationPhase {
     func resolveTypeIdentifier(expr: TypeIdentifierExpression, enclosingAPI: APIType) throws -> TypeProtocol {
         let type = try self.lookupType(name: expr.value, enclosingAPI: enclosingAPI)
         
-        guard expr.isList else { return type }
+        guard expr.isList else {
+            expr.assignType(type: type, env: self)
+            return type
+        }
         
-        return ListType(elementType: type)
+        let listType = ListType(elementType: type, scope: enclosingAPI.scope)
+        
+        expr.assignType(type: listType, env: self)
+        
+        return listType
     }
     
     func resolvePairType(expr: PairExpression, enclosingAPI: APIType) throws -> TypeProtocol {
-        return try self.resolveTypeIdentifier(expr: expr.type, enclosingAPI: enclosingAPI)
+        let type = try self.resolveTypeIdentifier(expr: expr.type, enclosingAPI: enclosingAPI)
+        
+        expr.name.assignType(type: type, env: self)
+        
+        return type
     }
     
     func resolveTypeDefType(expr: TypeDefExpression, enclosingAPI: APIType) throws -> StatementType {
         let propertyTypes = try expr.properties.map { try self.resolvePairType(expr: $0, enclosingAPI: enclosingAPI) }
         
-        let td = TypeDefType(name: expr.name.value, propertyTypes: propertyTypes)
+        let td = TypeDefType(name: expr.name.value, propertyTypes: propertyTypes, scope: enclosingAPI.scope)
         
         try self.declareType(name: expr.name.value, type: td, enclosingAPI: enclosingAPI)
+        
+        expr.assignType(type: td, env: self)
         
         return td
     }
     
-    func resolveInstanceCallType(expr: InstanceCallExpression, enclosingScope: ScopeAware) throws -> TypeProtocol {
+    func resolveInstanceCallType(expr: InstanceCallExpression, enclosingScope: Scope) throws -> TypeProtocol {
         return try self.resolveCallType(expr: expr, receiver: expr.receiver, enclosingScope: enclosingScope)
     }
     
-    func resolveStaticCallType(expr: StaticCallExpression, enclosingScope: ScopeAware) throws -> TypeProtocol {
+    func resolveStaticCallType(expr: StaticCallExpression, enclosingScope: Scope) throws -> TypeProtocol {
         return try self.resolveCallType(expr: expr, receiver: expr.receiver, enclosingScope: enclosingScope)
     }
     
-    func resolveCallType(expr: CallExpression, receiver: Expression, enclosingScope: ScopeAware) throws -> TypeProtocol {
+    func resolveCallType(expr: CallExpression, receiver: Expression, enclosingScope: Scope) throws -> TypeProtocol {
         // Resolve the callee method's type
-        guard let signatureType = try enclosingScope.scope.lookupBinding(named: expr.methodName.value) as? SignatureType else {
+        guard let signatureType = try enclosingScope.lookupBinding(named: expr.methodName.value) as? SignatureType else {
             throw OrbitError(message: "Call expressions are not permitted outside of method body")
         }
         
@@ -245,15 +339,23 @@ public class TypeResolver : CompilationPhase {
             we can check the rhs return type against the lhs expected type.
          */
         
-        return signatureType.returnType ?? VoidType()
+        let type = signatureType.returnType ?? VoidType(name: "Void", scope: enclosingScope)
+        
+        expr.assignType(type: type, env: self)
+        
+        return type
     }
     
-    func resolveListLiteralType(expr: ListExpression, enclosingScope: ScopeAware) throws -> ListType {
+    func resolveListLiteralType(expr: ListExpression, enclosingScope: Scope) throws -> ListType {
         // For now, we only have homogenous lists. When generics are working, we must revisit.
-        // TODO - Redo with workign generics
+        // TODO - Redo with working generics
         
         guard expr.value.count > 0 else {
-            return ListType(elementType: Anything.shared)
+            let type = ListType(elementType: Anything.shared, scope: enclosingScope)
+            
+            expr.assignType(type: type, env: self)
+            
+            return type
         }
         
         // List element type is type of first element
@@ -265,17 +367,33 @@ public class TypeResolver : CompilationPhase {
             guard type == elementType else { throw OrbitError(message: "Type must be the same for every element of a list. Expected \(elementType.name), found \(type.name)") }
         }
         
-        return ListType(elementType: elementType)
+        let type = ListType(elementType: elementType, scope: enclosingScope)
+        
+        expr.assignType(type: type, env: self)
+        
+        return type
     }
     
-    func resolveValueType(expr: Expression, enclosingScope: ScopeAware) throws -> TypeProtocol {
+    func resolveBinaryExpression(expr: BinaryExpression, enclosingScope: Scope) throws -> TypeProtocol {
+        let leftType = try resolveValueType(expr: expr.left, enclosingScope: enclosingScope)
+        let rightType = try resolveValueType(expr: expr.right, enclosingScope: enclosingScope)
+        
+        let fullName = "\(leftType.name).\(expr.op.symbol).\(rightType.name)"
+        
+        guard let retType = self.declaredOperatorTypes[fullName] else { throw OrbitError(message: "Operator '\(fullName)' does not exist") }
+        
+        return retType
+    }
+    
+    func resolveValueType(expr: Expression, enclosingScope: Scope) throws -> TypeProtocol {
         switch expr {
-            case is IntLiteralExpression: return self.declaredTypes["Orb::Core::Int"]! // TODO - This is gross! We can fix once imports are working
-            case is RealLiteralExpression: return self.declaredTypes["Orb::Core::Real"]!
-            case is IdentifierExpression: return try enclosingScope.scope.lookupBinding(named: (expr as! IdentifierExpression).value)
+            case is IntLiteralExpression: return self.declaredTypes["Int"]! // TODO - This is gross! We can fix once imports are working
+            case is RealLiteralExpression: return self.declaredTypes["Real"]!
+            case is IdentifierExpression: return try enclosingScope.lookupBinding(named: (expr as! IdentifierExpression).value)
             case is InstanceCallExpression: return try resolveInstanceCallType(expr: expr as! InstanceCallExpression, enclosingScope: enclosingScope)
             case is StaticCallExpression: return try resolveStaticCallType(expr: expr as! StaticCallExpression, enclosingScope: enclosingScope)
             case is ListExpression: return try resolveListLiteralType(expr: expr as! ListExpression, enclosingScope: enclosingScope)
+            case is BinaryExpression: return try resolveBinaryExpression(expr: expr as! BinaryExpression, enclosingScope: enclosingScope)
             
             // TODO - Other literals, property & indexed access
             
@@ -288,12 +406,20 @@ public class TypeResolver : CompilationPhase {
         let argumentTypes = try expr.parameters.map { $0.type }.map { try self.resolveTypeIdentifier(expr: $0, enclosingAPI: enclosingAPI) }
         
         guard let ret = expr.returnType else {
-            return SignatureType(receiverType: receiverType, argumentTypes: argumentTypes, returnType: nil)
+            let type = SignatureType(receiverType: receiverType, argumentTypes: argumentTypes, returnType: nil, scope: enclosingAPI.scope)
+            
+            expr.assignType(type: type, env: self)
+            
+            return type
         }
         
         let returnType = try self.resolveTypeIdentifier(expr: ret, enclosingAPI: enclosingAPI)
         
-        return SignatureType(receiverType: receiverType, argumentTypes: argumentTypes, returnType: returnType)
+        let type = SignatureType(receiverType: receiverType, argumentTypes: argumentTypes, returnType: returnType, scope: enclosingAPI.scope)
+        
+        expr.assignType(type: type, env: self)
+        
+        return type
     }
     
     func resolveStaticSignature(expr: StaticSignatureExpression, enclosingAPI: APIType) throws -> SignatureType {
@@ -301,12 +427,20 @@ public class TypeResolver : CompilationPhase {
         let argumentTypes = try expr.parameters.map { $0.type }.map { try self.resolveTypeIdentifier(expr: $0, enclosingAPI: enclosingAPI) }
         
         guard let ret = expr.returnType else {
-            return SignatureType(receiverType: receiverType, argumentTypes: argumentTypes, returnType: nil)
+            let type = SignatureType(receiverType: receiverType, argumentTypes: argumentTypes, returnType: nil, scope: enclosingAPI.scope)
+            
+            expr.assignType(type: type, env: self)
+            
+            return type
         }
         
         let returnType = try self.resolveTypeIdentifier(expr: ret, enclosingAPI: enclosingAPI)
         
-        return SignatureType(receiverType: receiverType, argumentTypes: argumentTypes, returnType: returnType)
+        let type = SignatureType(receiverType: receiverType, argumentTypes: argumentTypes, returnType: returnType, scope: enclosingAPI.scope)
+        
+        expr.assignType(type: type, env: self)
+        
+        return type
     }
     
     func resolveMethodType<T: SignatureExpression>(expr: MethodExpression<T>, enclosingAPI: APIType) throws -> MethodType {
@@ -316,17 +450,31 @@ public class TypeResolver : CompilationPhase {
         
         let method = MethodType(name: expr.signature.name.value, signatureType: signatureType, enclosingScope: enclosingAPI.scope)
         
+        expr.assignType(type: method, env: self)
+        
         if let inst = expr.signature as? InstanceSignatureExpression {
             // Inject receiver as self binding into current scope
-            try enclosingAPI.scope.bind(name: inst.receiverType.name.value, type: signatureType.receiverType)
+            try method.scope.bind(name: inst.receiverType.name.value, type: signatureType.receiverType)
+        }
+        
+        // Inject bindings for remaining args
+        for arg in expr.signature.parameters {
+            let type = try self.resolveTypeIdentifier(expr: arg.type, enclosingAPI: enclosingAPI)
+            try method.scope.bind(name: arg.name.value, type: type)
+            
+            arg.assignType(type: type, env: self)
         }
         
         for (idx, e) in expr.body.enumerated() {
             if let rt = signatureType.returnType, idx == expr.body.count - 1 {
                 if let ret = e as? ReturnStatement {
-                    let retType = try self.resolveValueType(expr: ret.value, enclosingScope: method)
+                    let retType = try self.resolveValueType(expr: ret.value, enclosingScope: method.scope)
                     
-                    guard retType.name == rt.name else { throw OrbitError(message: "Method \(signatureType.name) should return a value of type \(rt.name), found \(retType.name)") }
+                    guard retType.name == rt.name else {
+                        throw OrbitError(message: "Method \(signatureType.name) should return a value of type \(rt.name), found \(retType.name)")
+                    }
+                    
+                    ret.assignType(type: retType, env: self)
                     
                     break
                 }
@@ -339,14 +487,16 @@ public class TypeResolver : CompilationPhase {
     }
     
     func resolveAssignmentType(expr: AssignmentStatement, enclosingMethod: MethodType) throws -> TypeProtocol {
-        let rhsType = try self.resolveValueType(expr: expr.value, enclosingScope: enclosingMethod)
+        let rhsType = try self.resolveValueType(expr: expr.value, enclosingScope: enclosingMethod.scope)
         
         try enclosingMethod.scope.bind(name: expr.name.value, type: rhsType)
+        
+        expr.assignType(type: rhsType, env: self)
         
         return rhsType
     }
     
-    func resolveStatementType(expr: Expression, enclosingType: TypeProtocol & ScopeAware) throws -> TypeProtocol {
+    func resolveStatementType(expr: Expression, enclosingType: TypeProtocol) throws -> TypeProtocol {
         switch expr {
             case is TypeDefExpression: return try self.resolveTypeDefType(expr: expr as! TypeDefExpression, enclosingAPI: enclosingType as! APIType)
             
@@ -356,8 +506,8 @@ public class TypeResolver : CompilationPhase {
             
             case is AssignmentStatement: return try self.resolveAssignmentType(expr: expr as! AssignmentStatement, enclosingMethod: enclosingType as! MethodType)
             
-            case is InstanceCallExpression: return try self.resolveInstanceCallType(expr: expr as! InstanceCallExpression, enclosingScope: enclosingType)
-            case is StaticCallExpression: return try self.resolveStaticCallType(expr: expr as! StaticCallExpression, enclosingScope: enclosingType)
+            case is InstanceCallExpression: return try self.resolveInstanceCallType(expr: expr as! InstanceCallExpression, enclosingScope: enclosingType.scope)
+            case is StaticCallExpression: return try self.resolveStaticCallType(expr: expr as! StaticCallExpression, enclosingScope: enclosingType.scope)
             
             default: throw OrbitError.unresolvableExpression(expression: expr)
         }
@@ -386,7 +536,7 @@ public class TypeResolver : CompilationPhase {
         }
     }
     
-    public func execute(input: RootExpression) throws -> ProgramType {
+    public func execute(input: RootExpression) throws -> [Int : TypeProtocol] {
         var topLevelTypes: [TypeProtocol] = []
         for expr in input.body {
             let type = try self.resolveTopLevelType(expr: expr)
@@ -394,6 +544,6 @@ public class TypeResolver : CompilationPhase {
             topLevelTypes.append(type)
         }
         
-        return ProgramType(topLevelTypes: topLevelTypes)
+        return self.expressionTypeMap
     }
 }
