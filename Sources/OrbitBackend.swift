@@ -212,7 +212,13 @@ public class LLVMGenerator : CompilationPhase {
             return try self.lookupLLVMType(hashValue: param.type.hashValue)
         }
         
-        let funcType = FunctionType(argTypes: argTypes, returnType: LLVM.VoidType()) // TODO
+        var retType: IRType = LLVM.VoidType()
+        
+        if let ret = expr.signature.returnType {
+            retType = try self.lookupLLVMType(hashValue: ret.hashValue)
+        }
+        
+        let funcType = FunctionType(argTypes: argTypes, returnType: retType)
         let recName = self.mangle(name: "\(expr.signature.receiverType.value)")
         let funcName = self.mangle(name: "\(recName).\(expr.signature.name.value)")
         
