@@ -2,6 +2,7 @@ import Foundation
 import OrbitCompilerUtils
 import OrbitFrontend
 import LLVM
+import cllvm
 
 public struct IRBinding {
     let ref: IRValue
@@ -9,15 +10,18 @@ public struct IRBinding {
     let read: () -> IRValue
     let write: (IRValue) -> IRValue
     
-    static func create(builder: IRBuilder, type: IRType, name: String, initial: IRValue, isFunctionParameter: Bool = false) -> IRBinding {
-        let alloca = builder.buildAlloca(type: type, name: name)
+    let type: TypeProtocol
+    let irType: IRType
+    
+    static func create(builder: IRBuilder, type: TypeProtocol, irType: IRType, name: String, initial: IRValue, isFunctionParameter: Bool = false) -> IRBinding {
+        let alloca = builder.buildAlloca(type: irType, name: name)
         
         builder.buildStore(initial, to: alloca)
         
         let read = { builder.buildLoad(alloca) }
         let write = { builder.buildStore($0, to: alloca) }
         
-        return IRBinding(ref: alloca, read: read, write: write)
+        return IRBinding(ref: alloca, read: read, write: write, type: type, irType: irType)
     }
 }
 
@@ -111,6 +115,13 @@ public class LLVMGenerator : CompilationPhase {
     }
     
     func lookupLLVMType(type: TypeProtocol) throws -> IRType {
+        if let listType = type as? ListType {
+            let elementType = try lookupLLVMType(type: listType.elementType)
+            
+            return PointerType(pointee: elementType)
+            //return ArrayType(elementType: elementType, count: listType.size)
+        }
+        
         guard let t = self.llvmTypeMap[try type.fullName()] else {
             throw OrbitError(message: "Unknown type: \(type.name)")
         }
@@ -125,7 +136,9 @@ public class LLVMGenerator : CompilationPhase {
     }
     
     func lookupLLVMType(hashValue: Int) throws -> IRType {
-        guard let type = self.typeMap[hashValue] else { throw OrbitError(message: "FATAL") }
+        guard let type = self.typeMap[hashValue] else {
+            throw OrbitError(message: "FATAL")
+        }
         
         return try self.lookupLLVMType(type: type)
     }
@@ -133,7 +146,11 @@ public class LLVMGenerator : CompilationPhase {
     func generateTypeDef(expr: TypeDefExpression) throws {
         let type = try self.lookupType(expr: expr)
         
-        let irType = self.builder.createStruct(name: type.name)
+        let propertyTypes = try expr.properties.map { pair in
+            return try self.lookupLLVMType(hashValue: pair.type.hashValue)
+        }
+        
+        let irType = self.builder.createStruct(name: type.name, types: propertyTypes)
         
         try self.defineLLVMType(type: type, llvmType: irType)
     }
@@ -168,23 +185,61 @@ public class LLVMGenerator : CompilationPhase {
         return call
     }
     
-    func generateVariableRef(expr: IdentifierExpression, enclosingScope: Scope) throws -> IRValue {
+    func generateVariableRef(expr: IdentifierExpression, dereference: Bool = true, enclosingScope: Scope) throws -> IRValue {
         // TODO - For now, all variables are pointers.
-        // Copying value types will come later.
+        // Value types will come later.
         
         let ptr = try enclosingScope.lookupVariable(named: expr.value)
         
-        return ptr.read()
+        return dereference ? ptr.read() : ptr.ref
     }
     
-    func generateValue(expr: Expression, scope: Scope) throws -> IRValue {
+    func generatePropertyAccess(expr: PropertyAccessExpression, enclosingScope: Scope) throws -> IRValue {
+        guard let type = try self.lookupType(expr: expr) as? PropertyAccessType else { throw OrbitError(message: "FATAL") }
+        
+        guard let idx = type.receiverType.propertyOrder[expr.propertyName.value] else {
+            throw OrbitError(message: "Property '\(expr.propertyName.value)' not found for type '\(type.receiverType.name)'")
+        }
+        
+        let val = try self.generateValue(expr: expr.receiver, dereferencePointer: false, scope: enclosingScope)
+        
+        // TODO - Always dereference the GEP?
+        
+        let alloca = self.builder.buildStructGEP(val, index: idx)
+        
+        return self.builder.buildLoad(alloca)
+    }
+    
+    func generateList(expr: ListExpression, scope: Scope) throws -> IRValue {
+        let listType = try self.lookupType(expr: expr) as! ListType
+        //let arrType = try self.lookupLLVMType(type: listType)
+        let elementType = try self.lookupLLVMType(type: listType.elementType)
+        //let elementPtrType = PointerType(pointee: elementType)
+        let values = try expr.value.map { try self.generateValue(expr: $0, dereferencePointer: true, scope: scope) }
+        
+        let malloc = self.builder.buildMalloc(elementType, count: listType.size, name: "")
+        
+        values.enumerated().forEach { value in
+            let idx = IntType.int64.constant(value.offset)
+            let gep = self.builder.buildGEP(malloc, indices: [idx])
+            
+            _ = self.builder.buildStore(value.element, to: gep)
+        }
+        
+        return malloc
+    }
+    
+    func generateValue(expr: Expression, dereferencePointer: Bool = true, scope: Scope) throws -> IRValue {
         switch expr {
-            case is IdentifierExpression: return try self.generateVariableRef(expr: expr as! IdentifierExpression, enclosingScope: scope)
+        case is IdentifierExpression: return try self.generateVariableRef(expr: expr as! IdentifierExpression, dereference: dereferencePointer, enclosingScope: scope)
             case is IntLiteralExpression: return try self.generateIntValue(expr: expr as! IntLiteralExpression)
             case is RealLiteralExpression: return try self.generateRealValue(expr: expr as! RealLiteralExpression)
             case is BinaryExpression: return try self.generateBinaryExpression(expr: expr as! BinaryExpression, scope: scope)
+            case is PropertyAccessExpression: return try self.generatePropertyAccess(expr: expr as! PropertyAccessExpression, enclosingScope: scope)
+            case is AssignmentStatement: return try self.generateAssignment(expr: expr as! AssignmentStatement, scope: scope)
+            case is ListExpression: return try self.generateList(expr: expr as! ListExpression, scope: scope)
             
-            default: throw OrbitError(message: "Expression \(expr) does not yield a value")
+            default: throw OrbitError(message: "Expression \((expr as! GroupableExpression).dump()) does not yield a value")
         }
     }
     
@@ -194,20 +249,30 @@ public class LLVMGenerator : CompilationPhase {
         return self.builder.buildRet(retVal)
     }
     
+    func generateAssignment(expr: AssignmentStatement, scope: Scope) throws -> IRValue {
+        // TODO - Value types
+        
+        let valueType = try self.lookupType(expr: expr.value)
+        let irType = try self.lookupLLVMType(type: valueType)
+        let value = try self.generateValue(expr: expr.value, scope: scope)
+        let binding = IRBinding.create(builder: self.builder, type: valueType, irType: irType, name: expr.name.value, initial: value)
+        
+        try scope.defineVariable(named: expr.name.value, binding: binding)
+        
+        return value
+    }
+    
     func generate(expr: Expression, scope: Scope) throws -> IRValue? {
         switch expr {
             case is ValueExpression: return try self.generateValue(expr: expr, scope: scope)
             case is ReturnStatement: return try self.generateReturn(expr: expr as! ReturnStatement, scope: scope)
+            case is AssignmentStatement: return try self.generateAssignment(expr: expr as! AssignmentStatement, scope: scope)
             
             default: throw OrbitError(message: "Could not evaluate expression: \(expr)")
         }
     }
     
-    func generateStaticMethod(expr: MethodExpression<StaticSignatureExpression>) throws {
-        // Sanity check to ensure receiver type actually exists
-        _ = try self.lookupLLVMType(hashValue: expr.signature.receiverType.hashValue)
-        let sigType = try self.lookupType(expr: expr.signature)
-        
+    func generateSharedMethodComponents(expr: MethodExpression) throws -> FunctionType {
         let argTypes = try expr.signature.parameters.map { param in
             return try self.lookupLLVMType(hashValue: param.type.hashValue)
         }
@@ -218,52 +283,62 @@ public class LLVMGenerator : CompilationPhase {
             retType = try self.lookupLLVMType(hashValue: ret.hashValue)
         }
         
-        let funcType = FunctionType(argTypes: argTypes, returnType: retType)
-        let recName = self.mangle(name: "\(expr.signature.receiverType.value)")
-        let funcName = self.mangle(name: "\(recName).\(expr.signature.name.value)")
-        
-        let fn = self.builder.addFunction(funcName, type: funcType)
-        let entry = fn.appendBasicBlock(named: "entry")
+        return FunctionType(argTypes: argTypes, returnType: retType)
+    }
+    
+    /// Creates a basic block inside the given function named "entry" and positions the IP at the end
+    func generateEntryBlock(function: Function) -> BasicBlock {
+        let entry = function.appendBasicBlock(named: "entry")
         
         self.builder.positionAtEnd(of: entry)
         
-        try expr.signature.parameters.enumerated().forEach { (offset, element) in
-            let type = try self.lookupLLVMType(hashValue: element.type.hashValue)
-            let binding = IRBinding.create(builder: self.builder, type: type, name: element.name.value, initial: fn.parameters[offset])
-            
-            try sigType.scope.defineVariable(named: element.name.value, binding: binding)
-        }
-        
-        try expr.body.forEach { statement in
-            _ = try self.generate(expr: statement, scope: sigType.scope)
-        }
-        
-//        if let _ = expr.signature.returnType, let _ = expr.body.last as? ReturnStatement {
-//            // Method declares a return type & the method body ends with a return statement, success.
-//            // Could check actual return type matches expected return type.
-//            return
-//        }
+        return entry
     }
     
-    func generateInstanceMethod(expr: MethodExpression<InstanceSignatureExpression>) throws {
-        let funcType = FunctionType(argTypes: [], returnType: LLVM.VoidType()) // TODO
+    func generateMethodParams(params: [PairExpression], function: Function, signatureType: TypeProtocol) throws {
+        try params.enumerated().forEach { (offset, element) in
+            let type = try self.lookupType(expr: element.type)
+            let irType = try self.lookupLLVMType(hashValue: element.type.hashValue)
+            let binding = IRBinding.create(builder: self.builder, type: type, irType: irType, name: element.name.value, initial: function.parameters[offset])
+            
+            try signatureType.scope.defineVariable(named: element.name.value, binding: binding)
+        }
+    }
+    
+    func generateMethodBody(body: [Expression], signatureType: TypeProtocol) throws {
+        try body.forEach { statement in
+            _ = try self.generate(expr: statement, scope: signatureType.scope)
+        }
+    }
+    
+    func generateMethod(expr: MethodExpression, signatureType: TypeProtocol, receiverName: String, functionName: String) throws {
+        let funcType = try self.generateSharedMethodComponents(expr: expr)
         
-        let recName = self.mangle(name: "\(expr.signature.receiverType.type.value)")
-        let funcName = self.mangle(name: "\(recName).\(expr.signature.name.value)")
+        let recName = self.mangle(name: "\(receiverName)")
+        let funcName = self.mangle(name: "\(recName).\(functionName)")
         
-        _ = self.builder.addFunction(funcName, type: funcType)
+        let fn = self.builder.addFunction(funcName, type: funcType)
+        _ = self.generateEntryBlock(function: fn)
+        
+        try self.generateMethodParams(params: expr.signature.parameters, function: fn, signatureType: signatureType)
+        try self.generateMethodBody(body: expr.body, signatureType: signatureType)
+    }
+    
+    func generateStaticMethod(expr: MethodExpression) throws {
+        _ = try self.lookupLLVMType(hashValue: expr.signature.receiverType.hashValue)
+        let sigType = try self.lookupType(expr: expr.signature)
+        
+        try self.generateMethod(expr: expr, signatureType: sigType, receiverName: expr.signature.receiverType.value, functionName: expr.signature.name.value)
     }
     
     public func execute(input: (typeMap: [Int : TypeProtocol], ast: APIExpression)) throws -> Module {
         self.typeMap = input.typeMap
         
         let typeDefs = input.ast.body.filter { $0 is TypeDefExpression }
-        let staticMethodDefs = input.ast.body.filter { $0 is MethodExpression<StaticSignatureExpression> }
-        let instanceMethodDefs = input.ast.body.filter { $0 is MethodExpression<InstanceSignatureExpression> }
+        let staticMethodDefs = input.ast.body.filter { $0 is MethodExpression }
         
         try typeDefs.forEach { try self.generateTypeDef(expr: $0 as! TypeDefExpression) }
-        try staticMethodDefs.forEach { try self.generateStaticMethod(expr: $0 as! MethodExpression<StaticSignatureExpression>) }
-        try instanceMethodDefs.forEach { try self.generateInstanceMethod(expr: $0 as! MethodExpression<InstanceSignatureExpression>) }
+        try staticMethodDefs.forEach { try self.generateStaticMethod(expr: $0 as! MethodExpression) }
         
         return self.module
     }

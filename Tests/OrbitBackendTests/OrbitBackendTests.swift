@@ -3,7 +3,7 @@ import OrbitCompilerUtils
 import OrbitFrontend
 @testable import OrbitBackend
 
-class OrbitBackendTests: XCTestCase {
+class OrbitBackendTests : XCTestCase {
     func testResolve() {
         let lexer = Lexer()
         let parser = Parser()
@@ -11,10 +11,11 @@ class OrbitBackendTests: XCTestCase {
         
         let tokens = try! lexer.execute(input:
             "api Test " +
-                "type Main() " +
+                "type Main(x Int) " +
                 
-                "(Main) main (x Int) (Int) " +
-                    "return x + x " +
+                "(self Main) main (x Int) (Int) " +
+                    "l = [1, 2, x] " +
+                    "return l[0] " +
                 "... " +
             "... ")
         
