@@ -11,15 +11,9 @@ class OrbitBackendTests : XCTestCase {
         
         let tokens = try! lexer.execute(input:
             "api Test " +
-                "type Main(x Int) " +
+                "type Main() " +
                 
-                "(Main) main (x Int) (Int) " +
-                    "l = [1, 2, 3] " +
-                    "return l[x] " +
-                "... " +
-                
-                "(Int) main () () " +
-                    "Main.main(0) " +
+                "(Main) main () () " +
                 "... " +
             "... ")
         

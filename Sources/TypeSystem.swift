@@ -123,6 +123,7 @@ public struct TypeDefType : StatementType {
     public let name: String
     public let propertyTypes: [String : TypeProtocol]
     public let propertyOrder: [String : Int]
+    public var constructorTypes: [SignatureType]
     public let scope: Scope
 }
 
@@ -205,6 +206,8 @@ public struct MethodType : StatementType {
 }
 
 public struct APIType : CompoundType {
+    public static let Base = APIType(name: "__Base__")
+    
     public var exportableTypes: [TypeProtocol]
     public let name: String
     public let scope: Scope
@@ -279,6 +282,7 @@ public class TypeResolver : CompilationPhase {
     private(set) var declaredOperatorTypes: [String : TypeProtocol] = [:] // operator name against its return type
     var expressionTypeMap : [Int : TypeProtocol] = [:]
     
+    private var currentAPI: APIType = APIType.Base
     
     public init() {
         self.declaredTypes["Int"] = ValueType.IntType
@@ -336,11 +340,20 @@ public class TypeResolver : CompilationPhase {
     func resolveTypeDefType(expr: TypeDefExpression, enclosingAPI: APIType) throws -> StatementType {
         let propertyTypes = try expr.properties.map { try ($0.name.value, self.resolvePairType(expr: $0, enclosingAPI: enclosingAPI)) }
         
-        let td = TypeDefType(name: expr.name.value, propertyTypes: Dictionary(keyValuePairs: propertyTypes), propertyOrder: expr.propertyOrder, scope: enclosingAPI.scope)
+        var td = TypeDefType(name: expr.name.value, propertyTypes: Dictionary(keyValuePairs: propertyTypes), propertyOrder: expr.propertyOrder, constructorTypes: [], scope: enclosingAPI.scope)
         
         try self.declareType(name: expr.name.value, type: td, enclosingAPI: enclosingAPI)
         
         expr.assignType(type: td, env: self)
+        
+        let constructorTypes = try expr.constructorSignatures.map { try self.resolveStaticSignature(expr: $0, enclosingAPI: enclosingAPI) }
+        
+        td.constructorTypes = constructorTypes
+        
+        try td.constructorTypes.enumerated().forEach { constructor in
+            let constructorExpression = expr.constructorSignatures[constructor.offset]
+            try enclosingAPI.scope.bind(name: "\(expr.name.value).\(constructorExpression.name.value)", type: constructor.element)
+        }
         
         return td
     }
@@ -383,21 +396,21 @@ public class TypeResolver : CompilationPhase {
         return type
     }
     
-    func resolveStaticCallType(expr: StaticCallExpression, enclosingAPI: APIType) throws -> TypeProtocol {
+    func resolveStaticCallType(expr: StaticCallExpression) throws -> TypeProtocol {
         let receiver = expr.receiver
         
         // Resolve the callee method's type
         
         let name = Mangler.mangle(name: "\(receiver.value).\(expr.methodName.value)")
-        guard let signatureType = try enclosingAPI.scope.lookupBinding(named: name) as? SignatureType else { // expr.methodName.value
+        guard let signatureType = try self.currentAPI.scope.lookupBinding(named: name) as? SignatureType else { // expr.methodName.value
             throw OrbitError(message: "Call expressions are not permitted outside of method body")
         }
         
-        let argTypes = try expr.args.map { try self.resolveValueType(expr: $0, enclosingScope: enclosingAPI.scope) }
+        let argTypes = try expr.args.map { try self.resolveValueType(expr: $0, enclosingScope: self.currentAPI.scope) }
         let expectedArgs = signatureType.argumentTypes
         
         // 1st check: Does the receiver type match the type of the actual receiver
-        let actualReceiverType = try self.resolveTypeIdentifier(expr: receiver, enclosingAPI: enclosingAPI)
+        let actualReceiverType = try self.resolveTypeIdentifier(expr: receiver, enclosingAPI: self.currentAPI)
         
         // TODO - There's probably a better way to say this!
         guard actualReceiverType == signatureType.receiverType else { throw OrbitError(message: "Method \(signatureType.name) does not belong to type \(actualReceiverType.name)") }
@@ -418,7 +431,7 @@ public class TypeResolver : CompilationPhase {
          we can check the rhs return type against the lhs expected type.
          */
         
-        let type = signatureType.returnType ?? VoidType(name: "Void", scope: enclosingAPI.scope)
+        let type = signatureType.returnType ?? VoidType(name: "Void", scope: self.currentAPI.scope)
         
         expr.assignType(type: type, env: self)
         
@@ -535,13 +548,13 @@ public class TypeResolver : CompilationPhase {
         return type
     }
     
-    func resolveValueType(expr: Expression, enclosingScope: Scope, enclosingAPI: APIType? = nil) throws -> TypeProtocol {
+    func resolveValueType(expr: Expression, enclosingScope: Scope) throws -> TypeProtocol {
         switch expr {
             case is IntLiteralExpression: return self.declaredTypes["Int"]! // TODO - This is gross! We can fix once imports are working
             case is RealLiteralExpression: return self.declaredTypes["Real"]!
             case is IdentifierExpression: return try enclosingScope.lookupBinding(named: (expr as! IdentifierExpression).value)
             case is InstanceCallExpression: return try resolveInstanceCallType(expr: expr as! InstanceCallExpression, enclosingScope: enclosingScope)
-            case is StaticCallExpression: return try resolveStaticCallType(expr: expr as! StaticCallExpression, enclosingAPI: enclosingAPI!)
+            case is StaticCallExpression: return try resolveStaticCallType(expr: expr as! StaticCallExpression)
             case is ListExpression: return try resolveListLiteralType(expr: expr as! ListExpression, enclosingScope: enclosingScope)
             case is BinaryExpression: return try resolveBinaryExpression(expr: expr as! BinaryExpression, enclosingScope: enclosingScope)
             case is PropertyAccessExpression: return try resolvePropertyAccessType(expr: expr as! PropertyAccessExpression, enclosingScope: enclosingScope)
@@ -639,9 +652,7 @@ public class TypeResolver : CompilationPhase {
             case is AssignmentStatement: return try self.resolveAssignmentType(expr: expr as! AssignmentStatement, enclosingScope: enclosingType.scope)
             
             case is InstanceCallExpression: return try self.resolveInstanceCallType(expr: expr as! InstanceCallExpression, enclosingScope: enclosingType.scope)
-            case is StaticCallExpression:
-                let api = (enclosingType as! MethodType).enclosingAPI
-                return try self.resolveStaticCallType(expr: expr as! StaticCallExpression, enclosingAPI: api)
+            case is StaticCallExpression: return try self.resolveStaticCallType(expr: expr as! StaticCallExpression)
             
             default: throw OrbitError.unresolvableExpression(expression: expr)
         }
@@ -649,6 +660,8 @@ public class TypeResolver : CompilationPhase {
     
     func resolveAPIType(expr: APIExpression) throws -> TypeProtocol {
         var api = APIType(name: expr.name.value, exportableTypes: [])
+        
+        self.currentAPI = api
         
         var exportableTypes: [TypeProtocol] = []
         for e in expr.body {

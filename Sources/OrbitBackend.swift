@@ -153,6 +153,22 @@ public class LLVMGenerator : CompilationPhase {
         let irType = self.builder.createStruct(name: type.name, types: propertyTypes)
         
         try self.defineLLVMType(type: type, llvmType: irType)
+        
+        // Auto-generate constructor methods
+        
+        try expr.constructorSignatures.forEach { signature in
+            let fnType = try self.generateSharedMethodComponents(expr: signature)
+            let fn = self.builder.addFunction("\(type.name).\(signature.name.value)", type: fnType)
+            _ = self.generateEntryBlock(function: fn)
+            
+            let alloca = self.builder.buildAlloca(type: irType)
+            
+            // TODO - set initial properties
+            
+            let load = self.builder.buildLoad(alloca)
+            
+            _ = self.builder.buildRet(load)
+        }
     }
     
     func generateIntValue(expr: IntLiteralExpression) throws -> IRValue {
@@ -256,6 +272,7 @@ public class LLVMGenerator : CompilationPhase {
             case is AssignmentStatement: return try self.generateAssignment(expr: expr as! AssignmentStatement, scope: scope)
             case is ListExpression: return try self.generateList(expr: expr as! ListExpression, scope: scope)
             case is IndexAccessExpression: return try self.generateIndexAccess(expr: expr as! IndexAccessExpression, scope: scope)
+            case is StaticCallExpression: return try self.generateStaticCall(expr: expr as! StaticCallExpression, scope: scope)
             
             default: throw OrbitError(message: "Expression \((expr as! GroupableExpression).dump()) does not yield a value")
         }
@@ -299,14 +316,14 @@ public class LLVMGenerator : CompilationPhase {
         }
     }
     
-    func generateSharedMethodComponents(expr: MethodExpression) throws -> FunctionType {
-        let argTypes = try expr.signature.parameters.map { param in
+    func generateSharedMethodComponents(expr: StaticSignatureExpression) throws -> FunctionType {
+        let argTypes = try expr.parameters.map { param in
             return try self.lookupLLVMType(hashValue: param.type.hashValue)
         }
         
         var retType: IRType = LLVM.VoidType()
         
-        if let ret = expr.signature.returnType {
+        if let ret = expr.returnType {
             retType = try self.lookupLLVMType(hashValue: ret.hashValue)
         }
         
@@ -339,7 +356,7 @@ public class LLVMGenerator : CompilationPhase {
     }
     
     func generateMethod(expr: MethodExpression, signatureType: TypeProtocol, receiverName: String, functionName: String) throws {
-        let funcType = try self.generateSharedMethodComponents(expr: expr)
+        let funcType = try self.generateSharedMethodComponents(expr: expr.signature)
         
         let recName = self.mangle(name: "\(receiverName)")
         let funcName = self.mangle(name: "\(recName).\(functionName)")
@@ -362,6 +379,19 @@ public class LLVMGenerator : CompilationPhase {
         try self.generateMethod(expr: expr, signatureType: sigType, receiverName: expr.signature.receiverType.value, functionName: expr.signature.name.value)
     }
     
+    func generateMain() throws {
+        let fnType = FunctionType(argTypes: [IntType.int32, PointerType(pointee: PointerType(pointee: IntType.int8))], returnType: IntType.int32)
+        let fn = self.builder.addFunction("main", type: fnType)
+        let entry = fn.appendBasicBlock(named: "entry")
+        
+        self.builder.positionAtEnd(of: entry)
+        
+        guard let userMain = self.module.function(named: "Main.main") else { throw OrbitError(message: "Expected to find method '(Main) main () ()'") }
+        
+        _ = self.builder.buildCall(userMain, args: [])
+        _ = self.builder.buildRet(IntType.int32.constant(0))
+    }
+    
     public func execute(input: (typeMap: [Int : TypeProtocol], ast: APIExpression)) throws -> Module {
         self.typeMap = input.typeMap
         
@@ -370,6 +400,8 @@ public class LLVMGenerator : CompilationPhase {
         
         try typeDefs.forEach { try self.generateTypeDef(expr: $0 as! TypeDefExpression) }
         try staticMethodDefs.forEach { try self.generateStaticMethod(expr: $0 as! MethodExpression) }
+        
+        try self.generateMain()
         
         return self.module
     }
