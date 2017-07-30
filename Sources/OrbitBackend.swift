@@ -229,6 +229,23 @@ public class LLVMGenerator : CompilationPhase {
         return malloc
     }
     
+    /*
+        In essence, this method returns the receiver's nth element.
+        
+        Under the hood, lists are just pointers. So what is really happening
+        here is pointer arithmetic & dereferencing. The Type System will have
+        already checked that the receiver object is indexable and that the type
+        of the index value resolves to an Integer.
+     */
+    func generateIndexAccess(expr: IndexAccessExpression, scope: Scope) throws -> IRValue {
+        let receiver = try self.generateValue(expr: expr.receiver, dereferencePointer: true, scope: scope)
+        
+        let indices = try expr.indices.map { try self.generateValue(expr: $0, scope: scope) }
+        let alloca = self.builder.buildGEP(receiver, indices: indices)
+        
+        return self.builder.buildLoad(alloca)
+    }
+    
     func generateValue(expr: Expression, dereferencePointer: Bool = true, scope: Scope) throws -> IRValue {
         switch expr {
         case is IdentifierExpression: return try self.generateVariableRef(expr: expr as! IdentifierExpression, dereference: dereferencePointer, enclosingScope: scope)
@@ -238,6 +255,7 @@ public class LLVMGenerator : CompilationPhase {
             case is PropertyAccessExpression: return try self.generatePropertyAccess(expr: expr as! PropertyAccessExpression, enclosingScope: scope)
             case is AssignmentStatement: return try self.generateAssignment(expr: expr as! AssignmentStatement, scope: scope)
             case is ListExpression: return try self.generateList(expr: expr as! ListExpression, scope: scope)
+            case is IndexAccessExpression: return try self.generateIndexAccess(expr: expr as! IndexAccessExpression, scope: scope)
             
             default: throw OrbitError(message: "Expression \((expr as! GroupableExpression).dump()) does not yield a value")
         }
@@ -262,11 +280,20 @@ public class LLVMGenerator : CompilationPhase {
         return value
     }
     
+    func generateStaticCall(expr: StaticCallExpression, scope: Scope) throws -> IRValue {
+        let name = Mangler.mangle(name: "\(expr.receiver.value).\(expr.methodName.value)")
+        let fn = try self.lookupFunction(named: name)
+        let args = try expr.args.map { try self.generateValue(expr: $0, scope: scope) }
+        
+        return self.builder.buildCall(fn, args: args)
+    }
+    
     func generate(expr: Expression, scope: Scope) throws -> IRValue? {
         switch expr {
             case is ValueExpression: return try self.generateValue(expr: expr, scope: scope)
             case is ReturnStatement: return try self.generateReturn(expr: expr as! ReturnStatement, scope: scope)
             case is AssignmentStatement: return try self.generateAssignment(expr: expr as! AssignmentStatement, scope: scope)
+            case is StaticCallExpression: return try self.generateStaticCall(expr: expr as! StaticCallExpression, scope: scope)
             
             default: throw OrbitError(message: "Could not evaluate expression: \(expr)")
         }
@@ -322,6 +349,10 @@ public class LLVMGenerator : CompilationPhase {
         
         try self.generateMethodParams(params: expr.signature.parameters, function: fn, signatureType: signatureType)
         try self.generateMethodBody(body: expr.body, signatureType: signatureType)
+        
+        if expr.signature.returnType == nil {
+            _ = self.builder.buildRetVoid()
+        }
     }
     
     func generateStaticMethod(expr: MethodExpression) throws {

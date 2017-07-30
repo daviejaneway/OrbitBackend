@@ -13,9 +13,13 @@ class OrbitBackendTests : XCTestCase {
             "api Test " +
                 "type Main(x Int) " +
                 
-                "(self Main) main (x Int) (Int) " +
-                    "l = [1, 2, x] " +
-                    "return l[0] " +
+                "(Main) main (x Int) (Int) " +
+                    "l = [1, 2, 3] " +
+                    "return l[x] " +
+                "... " +
+                
+                "(Int) main () () " +
+                    "Main.main(0) " +
                 "... " +
             "... ")
         
