@@ -245,6 +245,13 @@ public struct ValueType : TypeProtocol {
     public static let IntType = ValueType(name: "Int", width: MemoryLayout<Int>.size * 8, scope: Scope.programScope)
     public static let RealType = ValueType(name: "Real", width: MemoryLayout<Double>.size * 8, scope: Scope.programScope)
     
+    public static let BoolType = ValueType(name: "Bool", width: 1, scope: Scope.programScope)
+    public static let Int8Type = ValueType(name: "Int8", width: 8, scope: Scope.programScope)
+    public static let Int16Type = ValueType(name: "Int16", width: 16, scope: Scope.programScope)
+    public static let Int32Type = ValueType(name: "Int32", width: 32, scope: Scope.programScope)
+    public static let Int64Type = ValueType(name: "Int64", width: 64, scope: Scope.programScope)
+    public static let Int128Type = ValueType(name: "Int128", width: 128, scope: Scope.programScope)
+    
     public var name: String
     public let width: Int
     public let scope: Scope
@@ -288,6 +295,13 @@ public class TypeResolver : CompilationPhase {
         self.declaredTypes["Int"] = ValueType.IntType
         self.declaredTypes["Real"] = ValueType.RealType
         
+        self.declaredTypes["Bool"] = ValueType.BoolType
+        self.declaredTypes["Int8"] = ValueType.Int8Type
+        self.declaredTypes["Int16"] = ValueType.Int16Type
+        self.declaredTypes["Int32"] = ValueType.Int32Type
+        self.declaredTypes["Int64"] = ValueType.Int64Type
+        self.declaredTypes["Int128"] = ValueType.Int128Type
+        
         self.declaredOperatorTypes["Int.+.Int"] = ValueType.IntType
     }
     
@@ -303,6 +317,12 @@ public class TypeResolver : CompilationPhase {
         switch name {
             case "Int": return self.declaredTypes["Int"]!
             case "Real": return self.declaredTypes["Real"]!
+            case "Bool": return self.declaredTypes["Bool"]!
+            case "Int8": return self.declaredTypes["Int8"]!
+            case "Int16": return self.declaredTypes["Int16"]!
+            case "Int32": return self.declaredTypes["Int32"]!
+            case "Int64": return self.declaredTypes["Int64"]!
+            case "Int128": return self.declaredTypes["Int128"]!
             
             default:
                 guard let type = self.declaredTypes[enclosingAPI.qualifyName(name: name)] else {
@@ -316,13 +336,15 @@ public class TypeResolver : CompilationPhase {
     func resolveTypeIdentifier(expr: TypeIdentifierExpression, enclosingAPI: APIType) throws -> TypeProtocol {
         let type = try self.lookupType(name: expr.value, enclosingAPI: enclosingAPI)
         
-        guard expr.isList else {
+        guard let lType = expr as? ListTypeIdentifierExpression else {
             expr.assignType(type: type, env: self)
             return type
         }
         
+        let elementType = try resolveTypeIdentifier(expr: lType.elementType, enclosingAPI: enclosingAPI)
+        
         // TODO - Array size in type e.g. `[Int, 2]`
-        let listType = ListType(elementType: type, size: 0, scope: enclosingAPI.scope)
+        let listType = ListType(elementType: elementType, size: 0, scope: enclosingAPI.scope)
         
         expr.assignType(type: listType, env: self)
         
@@ -396,17 +418,21 @@ public class TypeResolver : CompilationPhase {
         return type
     }
     
-    func resolveStaticCallType(expr: StaticCallExpression) throws -> TypeProtocol {
+    func resolveStaticCallType(expr: StaticCallExpression, enclosingScope: Scope) throws -> TypeProtocol {
         let receiver = expr.receiver
         
         // Resolve the callee method's type
         
         let name = Mangler.mangle(name: "\(receiver.value).\(expr.methodName.value)")
+        
         guard let signatureType = try self.currentAPI.scope.lookupBinding(named: name) as? SignatureType else { // expr.methodName.value
             throw OrbitError(message: "Call expressions are not permitted outside of method body")
         }
         
-        let argTypes = try expr.args.map { try self.resolveValueType(expr: $0, enclosingScope: self.currentAPI.scope) }
+        let argTypes = try expr.args.map {
+            try self.resolveValueType(expr: $0, enclosingScope: enclosingScope)
+        }
+        
         let expectedArgs = signatureType.argumentTypes
         
         // 1st check: Does the receiver type match the type of the actual receiver
@@ -554,7 +580,7 @@ public class TypeResolver : CompilationPhase {
             case is RealLiteralExpression: return self.declaredTypes["Real"]!
             case is IdentifierExpression: return try enclosingScope.lookupBinding(named: (expr as! IdentifierExpression).value)
             case is InstanceCallExpression: return try resolveInstanceCallType(expr: expr as! InstanceCallExpression, enclosingScope: enclosingScope)
-            case is StaticCallExpression: return try resolveStaticCallType(expr: expr as! StaticCallExpression)
+            case is StaticCallExpression: return try resolveStaticCallType(expr: expr as! StaticCallExpression, enclosingScope: enclosingScope)
             case is ListExpression: return try resolveListLiteralType(expr: expr as! ListExpression, enclosingScope: enclosingScope)
             case is BinaryExpression: return try resolveBinaryExpression(expr: expr as! BinaryExpression, enclosingScope: enclosingScope)
             case is PropertyAccessExpression: return try resolvePropertyAccessType(expr: expr as! PropertyAccessExpression, enclosingScope: enclosingScope)
@@ -591,9 +617,10 @@ public class TypeResolver : CompilationPhase {
         let signatureType = try self.resolveStaticSignature(expr: expr.signature, enclosingAPI: enclosingAPI)
         
         let name = Mangler.mangle(name: "\(expr.signature.receiverType.value).\(expr.signature.name.value)")
-        try enclosingAPI.scope.bind(name: name, type: signatureType) // expr.signature.name.value
         
         let method = MethodType(name: expr.signature.name.value, signatureType: signatureType, enclosingAPI: enclosingAPI, enclosingScope: enclosingAPI.scope)
+        
+        try enclosingAPI.scope.bind(name: name, type: method)
         
         expr.assignType(type: method, env: self)
         
@@ -652,7 +679,7 @@ public class TypeResolver : CompilationPhase {
             case is AssignmentStatement: return try self.resolveAssignmentType(expr: expr as! AssignmentStatement, enclosingScope: enclosingType.scope)
             
             case is InstanceCallExpression: return try self.resolveInstanceCallType(expr: expr as! InstanceCallExpression, enclosingScope: enclosingType.scope)
-            case is StaticCallExpression: return try self.resolveStaticCallType(expr: expr as! StaticCallExpression)
+            case is StaticCallExpression: return try self.resolveStaticCallType(expr: expr as! StaticCallExpression, enclosingScope: enclosingType.scope)
             
             default: throw OrbitError.unresolvableExpression(expression: expr)
         }

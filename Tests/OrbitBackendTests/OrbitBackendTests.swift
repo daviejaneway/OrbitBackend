@@ -10,10 +10,11 @@ class OrbitBackendTests : XCTestCase {
         let tr = TypeResolver()
         
         let tokens = try! lexer.execute(input:
-            "api Test " +
-                "type Main() " +
+            "api Test \n" +
+                "type Main(argc Int32, argv [[Int8]]) \n" +
                 
-                "(Main) main () () " +
+                "(self Main) main () (Int) " +
+                "   return 0 " +
                 "... " +
             "... ")
         

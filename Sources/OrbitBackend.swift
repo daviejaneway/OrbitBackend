@@ -83,7 +83,14 @@ public class LLVMGenerator : CompilationPhase {
     private var typeMap: [Int : TypeProtocol] = [:]
     private var llvmTypeMap: [Name : IRType] = [
         Name(relativeName: "Int", absoluteName: "Int") : BuiltIn.NativeIntType,
-        Name(relativeName: "Real", absoluteName: "Real") : BuiltIn.NativeRealType
+        Name(relativeName: "Real", absoluteName: "Real") : BuiltIn.NativeRealType,
+        
+        Name(relativeName: "Bool", absoluteName: "Bool") : IntType.int1,
+        Name(relativeName: "Int8", absoluteName: "Int8") : IntType.int8,
+        Name(relativeName: "Int16", absoluteName: "Int16") : IntType.int16,
+        Name(relativeName: "Int32", absoluteName: "Int32") : IntType.int32,
+        Name(relativeName: "Int64", absoluteName: "Int64") : IntType.int64,
+        Name(relativeName: "Int128", absoluteName: "Int128") : IntType.int128,
     ]
     
     public init(apiName: String) {
@@ -119,12 +126,13 @@ public class LLVMGenerator : CompilationPhase {
             let elementType = try lookupLLVMType(type: listType.elementType)
             
             return PointerType(pointee: elementType)
-            //return ArrayType(elementType: elementType, count: listType.size)
         }
         
         guard let t = self.llvmTypeMap[try type.fullName()] else {
             throw OrbitError(message: "Unknown type: \(type.name)")
         }
+        
+        guard type is ValueType else { return PointerType(pointee: t) }
         
         return t
     }
@@ -161,13 +169,25 @@ public class LLVMGenerator : CompilationPhase {
             let fn = self.builder.addFunction("\(type.name).\(signature.name.value)", type: fnType)
             _ = self.generateEntryBlock(function: fn)
             
+            let propertyTypes = try signature.parameters.map { try self.lookupLLVMType(hashValue: $0.type.hashValue) }
+            
+            if type is ValueType {
+                _ = self.builder.buildRet(StructType.constant(values: fn.parameters))
+                return
+            }
+            
             let alloca = self.builder.buildAlloca(type: irType)
             
             // TODO - set initial properties
             
-            let load = self.builder.buildLoad(alloca)
+            fn.parameters.enumerated().forEach { pair in
+                let gep = self.builder.buildStructGEP(alloca, index: pair.offset)
+                
+                self.builder.buildStore(pair.element, to: gep)
+            }
             
-            _ = self.builder.buildRet(load)
+            
+            _ = self.builder.buildRet(alloca)
         }
     }
     
@@ -317,8 +337,13 @@ public class LLVMGenerator : CompilationPhase {
     }
     
     func generateSharedMethodComponents(expr: StaticSignatureExpression) throws -> FunctionType {
-        let argTypes = try expr.parameters.map { param in
-            return try self.lookupLLVMType(hashValue: param.type.hashValue)
+        let argTypes: [IRType] = try expr.parameters.map { param in
+            //let type = try self.lookupType(expr: param.type)
+            let irType = try self.lookupLLVMType(hashValue: param.type.hashValue)
+            
+            //guard type is ValueType else { return PointerType(pointee: irType) }
+            
+            return irType
         }
         
         var retType: IRType = LLVM.VoidType()
@@ -342,7 +367,12 @@ public class LLVMGenerator : CompilationPhase {
     func generateMethodParams(params: [PairExpression], function: Function, signatureType: TypeProtocol) throws {
         try params.enumerated().forEach { (offset, element) in
             let type = try self.lookupType(expr: element.type)
-            let irType = try self.lookupLLVMType(hashValue: element.type.hashValue)
+            var irType = try self.lookupLLVMType(hashValue: element.type.hashValue)
+            
+            if type is ValueType {
+                
+            }
+            
             let binding = IRBinding.create(builder: self.builder, type: type, irType: irType, name: element.name.value, initial: function.parameters[offset])
             
             try signatureType.scope.defineVariable(named: element.name.value, binding: binding)
@@ -380,15 +410,25 @@ public class LLVMGenerator : CompilationPhase {
     }
     
     func generateMain() throws {
+        // TODO - We'll handle this better once imports are working
         let fnType = FunctionType(argTypes: [IntType.int32, PointerType(pointee: PointerType(pointee: IntType.int8))], returnType: IntType.int32)
         let fn = self.builder.addFunction("main", type: fnType)
         let entry = fn.appendBasicBlock(named: "entry")
         
         self.builder.positionAtEnd(of: entry)
         
-        guard let userMain = self.module.function(named: "Main.main") else { throw OrbitError(message: "Expected to find method '(Main) main () ()'") }
+        guard let userMain = self.module.function(named: "Main.main") else { throw OrbitError(message: "Expected to find method '(Main) main (Main) ()'") }
+        guard let mainType = self.module.type(named: "Main") else { throw OrbitError(message: "APIs tagged as Main Must declare a type Main(argc Int, argv [String])") }
         
-        _ = self.builder.buildCall(userMain, args: [])
+        let alloca = self.builder.buildAlloca(type: mainType)
+        
+        let gep1 = self.builder.buildStructGEP(alloca, index: 0)
+        let gep2 = self.builder.buildStructGEP(alloca, index: 1)
+        
+        _ = self.builder.buildStore(fn.parameters[0], to: gep1)
+        _ = self.builder.buildStore(fn.parameters[1], to: gep2)
+        
+        _ = self.builder.buildCall(userMain, args: [alloca])
         _ = self.builder.buildRet(IntType.int32.constant(0))
     }
     
