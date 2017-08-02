@@ -276,6 +276,14 @@ public struct IndexAccessType : CompoundType {
     public let scope: Scope
 }
 
+public struct ReferenceType : TypeProtocol {
+    public static let StringType = ReferenceType(name: "String", underlyingType: ValueType.Int8Type, scope: Scope.programScope)
+    
+    public let name: String
+    public let underlyingType: TypeProtocol
+    public let scope: Scope
+}
+
 /**
     This compilation phase traverses the AST and tags each expression with basic type info.
     A type map is created for this API and any imported APIs. When an expression resolves to a
@@ -302,6 +310,8 @@ public class TypeResolver : CompilationPhase {
         self.declaredTypes["Int64"] = ValueType.Int64Type
         self.declaredTypes["Int128"] = ValueType.Int128Type
         
+        self.declaredTypes["String"] = ReferenceType.StringType
+        
         self.declaredOperatorTypes["Int.+.Int"] = ValueType.IntType
     }
     
@@ -323,6 +333,7 @@ public class TypeResolver : CompilationPhase {
             case "Int32": return self.declaredTypes["Int32"]!
             case "Int64": return self.declaredTypes["Int64"]!
             case "Int128": return self.declaredTypes["Int128"]!
+            case "String": return self.declaredTypes["String"]!
             
             default:
                 guard let type = self.declaredTypes[enclosingAPI.qualifyName(name: name)] else {
@@ -576,8 +587,21 @@ public class TypeResolver : CompilationPhase {
     
     func resolveValueType(expr: Expression, enclosingScope: Scope) throws -> TypeProtocol {
         switch expr {
-            case is IntLiteralExpression: return self.declaredTypes["Int"]! // TODO - This is gross! We can fix once imports are working
-            case is RealLiteralExpression: return self.declaredTypes["Real"]!
+            case is IntLiteralExpression:
+                let type = self.declaredTypes["Int"]!
+                expr.assignType(type: type, env: self)
+                return type
+            
+            case is RealLiteralExpression:
+                let type = self.declaredTypes["Real"]!
+                expr.assignType(type: type, env: self)
+                return type
+            
+            case is StringLiteralExpression:
+                let type = self.declaredTypes["String"]!
+                expr.assignType(type: type, env: self)
+                return type
+            
             case is IdentifierExpression: return try enclosingScope.lookupBinding(named: (expr as! IdentifierExpression).value)
             case is InstanceCallExpression: return try resolveInstanceCallType(expr: expr as! InstanceCallExpression, enclosingScope: enclosingScope)
             case is StaticCallExpression: return try resolveStaticCallType(expr: expr as! StaticCallExpression, enclosingScope: enclosingScope)
@@ -670,6 +694,15 @@ public class TypeResolver : CompilationPhase {
         return rhsType
     }
     
+    func resolveDebugType(expr: DebugExpression, enclosingScope: Scope) throws -> TypeProtocol {
+        let type = try self.resolveValueType(expr: expr.string, enclosingScope: enclosingScope)
+        
+        expr.assignType(type: type, env: self)
+        expr.string.assignType(type: type, env: self)
+        
+        return type
+    }
+    
     func resolveStatementType(expr: Expression, enclosingType: TypeProtocol) throws -> TypeProtocol {
         switch expr {
             case is TypeDefExpression: return try self.resolveTypeDefType(expr: expr as! TypeDefExpression, enclosingAPI: enclosingType as! APIType)
@@ -680,6 +713,8 @@ public class TypeResolver : CompilationPhase {
             
             case is InstanceCallExpression: return try self.resolveInstanceCallType(expr: expr as! InstanceCallExpression, enclosingScope: enclosingType.scope)
             case is StaticCallExpression: return try self.resolveStaticCallType(expr: expr as! StaticCallExpression, enclosingScope: enclosingType.scope)
+            
+            case is DebugExpression: return try self.resolveDebugType(expr: expr as! DebugExpression, enclosingScope: enclosingType.scope)
             
             default: throw OrbitError.unresolvableExpression(expression: expr)
         }

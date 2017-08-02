@@ -91,6 +91,7 @@ public class LLVMGenerator : CompilationPhase {
         Name(relativeName: "Int32", absoluteName: "Int32") : IntType.int32,
         Name(relativeName: "Int64", absoluteName: "Int64") : IntType.int64,
         Name(relativeName: "Int128", absoluteName: "Int128") : IntType.int128,
+        Name(relativeName: "String", absoluteName: "String") : IntType.int8
     ]
     
     public init(apiName: String) {
@@ -116,7 +117,9 @@ public class LLVMGenerator : CompilationPhase {
     }
     
     func lookupType(expr: Expression) throws -> TypeProtocol {
-        guard let type = self.typeMap[expr.hashValue] else { throw OrbitError(message: "Type of expression '\(expr)' could not be deduced") }
+        guard let type = self.typeMap[expr.hashValue] else {
+            throw OrbitError(message: "Type of expression '\(expr)' could not be deduced")
+        }
         
         return type
     }
@@ -282,11 +285,21 @@ public class LLVMGenerator : CompilationPhase {
         return self.builder.buildLoad(alloca)
     }
     
+    func generateStringValue(expr: StringLiteralExpression) throws -> IRValue {
+        // TODO - String interpolation, ideally mimic Swift's "Hello, \(name)!" syntax
+        
+        let str = self.builder.buildGlobalStringPtr(expr.value)
+        
+        return str
+    }
+    
     func generateValue(expr: Expression, dereferencePointer: Bool = true, scope: Scope) throws -> IRValue {
         switch expr {
         case is IdentifierExpression: return try self.generateVariableRef(expr: expr as! IdentifierExpression, dereference: dereferencePointer, enclosingScope: scope)
             case is IntLiteralExpression: return try self.generateIntValue(expr: expr as! IntLiteralExpression)
             case is RealLiteralExpression: return try self.generateRealValue(expr: expr as! RealLiteralExpression)
+            case is StringLiteralExpression: return try self.generateStringValue(expr: expr as! StringLiteralExpression)
+            
             case is BinaryExpression: return try self.generateBinaryExpression(expr: expr as! BinaryExpression, scope: scope)
             case is PropertyAccessExpression: return try self.generatePropertyAccess(expr: expr as! PropertyAccessExpression, enclosingScope: scope)
             case is AssignmentStatement: return try self.generateAssignment(expr: expr as! AssignmentStatement, scope: scope)
@@ -308,6 +321,7 @@ public class LLVMGenerator : CompilationPhase {
         // TODO - Value types
         
         let valueType = try self.lookupType(expr: expr.value)
+        
         let irType = try self.lookupLLVMType(type: valueType)
         let value = try self.generateValue(expr: expr.value, scope: scope)
         let binding = IRBinding.create(builder: self.builder, type: valueType, irType: irType, name: expr.name.value, initial: value)
@@ -325,12 +339,41 @@ public class LLVMGenerator : CompilationPhase {
         return self.builder.buildCall(fn, args: args)
     }
     
+    func generateDebug(expr: DebugExpression, scope: Scope) throws -> IRValue? {
+        let valueType = try self.lookupType(expr: expr.string)
+        
+        guard valueType == ReferenceType.StringType else {
+            // TODO - This is very temporary.
+            // The right way to do this is accept anything that conforms to
+            // some Debuggable/Stringable trait and call its "toString" method.
+            
+            throw OrbitError(message: "Debug statement expected a string, found a '\(valueType.name)'")
+        }
+        
+        let value = try self.generateValue(expr: expr.string, scope: scope)
+        
+        guard let puts = self.module.function(named: "puts") else {
+            let strType = PointerType(pointee: IntType.int8)
+            let putsType = FunctionType(argTypes: [strType], returnType: IntType.int32)
+            let puts = self.builder.addFunction("puts", type: putsType)
+            
+            _ = self.builder.buildCall(puts, args: [value])
+            
+            return nil
+        }
+        
+        _ = self.builder.buildCall(puts, args: [value])
+        
+        return nil
+    }
+    
     func generate(expr: Expression, scope: Scope) throws -> IRValue? {
         switch expr {
             case is ValueExpression: return try self.generateValue(expr: expr, scope: scope)
             case is ReturnStatement: return try self.generateReturn(expr: expr as! ReturnStatement, scope: scope)
             case is AssignmentStatement: return try self.generateAssignment(expr: expr as! AssignmentStatement, scope: scope)
             case is StaticCallExpression: return try self.generateStaticCall(expr: expr as! StaticCallExpression, scope: scope)
+            case is DebugExpression: return try self.generateDebug(expr: expr as! DebugExpression, scope: scope)
             
             default: throw OrbitError(message: "Could not evaluate expression: \(expr)")
         }
@@ -367,11 +410,7 @@ public class LLVMGenerator : CompilationPhase {
     func generateMethodParams(params: [PairExpression], function: Function, signatureType: TypeProtocol) throws {
         try params.enumerated().forEach { (offset, element) in
             let type = try self.lookupType(expr: element.type)
-            var irType = try self.lookupLLVMType(hashValue: element.type.hashValue)
-            
-            if type is ValueType {
-                
-            }
+            let irType = try self.lookupLLVMType(hashValue: element.type.hashValue)
             
             let binding = IRBinding.create(builder: self.builder, type: type, irType: irType, name: element.name.value, initial: function.parameters[offset])
             
