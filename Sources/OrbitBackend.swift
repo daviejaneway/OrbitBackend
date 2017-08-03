@@ -408,6 +408,10 @@ public class LLVMGenerator : CompilationPhase {
             let deref = derefPointer(value: value).type.asLLVM()
             let pointeeKind = LLVMGetTypeKind(deref)
             
+            if type == ReferenceType.StringType {
+                return "%s\n"
+            }
+            
             if pointeeKind == LLVMStructTypeKind {
                 // TODO - StringValue trait
                 throw OrbitError(message: "Struct debugging is not currently supported")
