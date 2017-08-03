@@ -11,7 +11,7 @@
       "package": "OrbitCompilerUtils",
       "reason": null,
       "repositoryURL": "https://github.com/daviejaneway/OrbitCompilerUtils.git",
-      "version": "0.0.1"
+      "version": "0.0.3"
     },
     {
       "package": "OrbitFrontend",

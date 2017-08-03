@@ -30,6 +30,7 @@ class BuiltIn {
     static let NativeRealType = FloatType.double
     
     static let IntIntPlusFn = FunctionType(argTypes: [BuiltIn.NativeIntType, BuiltIn.NativeIntType], returnType: BuiltIn.NativeIntType)
+    static let Printf = FunctionType(argTypes: [PointerType(pointee: IntType.int8)], returnType: IntType.int32, isVarArg: true)
     
 //    static let availableTypes = [
 //        "Int": BuiltIn.NativeIntType,
@@ -100,6 +101,7 @@ public class LLVMGenerator : CompilationPhase {
         
         // BUILT-INS
         _ = BuiltIn.generateIntIntPlusFn(builder: self.builder)
+        _ = self.builder.addFunction("printf", type: BuiltIn.Printf)
     }
     
     func mangle(name: String) -> String {
@@ -306,6 +308,7 @@ public class LLVMGenerator : CompilationPhase {
             case is ListExpression: return try self.generateList(expr: expr as! ListExpression, scope: scope)
             case is IndexAccessExpression: return try self.generateIndexAccess(expr: expr as! IndexAccessExpression, scope: scope)
             case is StaticCallExpression: return try self.generateStaticCall(expr: expr as! StaticCallExpression, scope: scope)
+            case is InstanceCallExpression: return try self.generateInstanceCall(expr: expr as! InstanceCallExpression, scope: scope)
             
             default: throw OrbitError(message: "Expression \((expr as! GroupableExpression).dump()) does not yield a value")
         }
@@ -339,30 +342,99 @@ public class LLVMGenerator : CompilationPhase {
         return self.builder.buildCall(fn, args: args)
     }
     
-    func generateDebug(expr: DebugExpression, scope: Scope) throws -> IRValue? {
-        let valueType = try self.lookupType(expr: expr.string)
+    func generateInstanceCall(expr: InstanceCallExpression, scope: Scope) throws -> IRValue {
+        let receiverType = try self.lookupType(expr: expr.receiver)
+        let name = Mangler.mangle(name: "\(receiverType.name).\(expr.methodName.value)")
+        let fn = try self.lookupFunction(named: name)
+        let selfValue = try self.generateValue(expr: expr.receiver, scope: scope)
+        var args = [selfValue]
         
-        guard valueType == ReferenceType.StringType else {
-            // TODO - This is very temporary.
-            // The right way to do this is accept anything that conforms to
-            // some Debuggable/Stringable trait and call its "toString" method.
-            
-            throw OrbitError(message: "Debug statement expected a string, found a '\(valueType.name)'")
+        try expr.args.forEach { arg in
+            let value = try self.generateValue(expr: arg, scope: scope)
+            args.append(value)
         }
         
-        let value = try self.generateValue(expr: expr.string, scope: scope)
-        
-        guard let puts = self.module.function(named: "puts") else {
+        return self.builder.buildCall(fn, args: args)
+    }
+    
+    func generateStringDebug(value: IRValue) {
+        guard let puts = self.module.function(named: "printf") else {
             let strType = PointerType(pointee: IntType.int8)
             let putsType = FunctionType(argTypes: [strType], returnType: IntType.int32)
             let puts = self.builder.addFunction("puts", type: putsType)
             
             _ = self.builder.buildCall(puts, args: [value])
             
-            return nil
+            return
         }
         
         _ = self.builder.buildCall(puts, args: [value])
+    }
+    
+//    func generateIntDebug(value: IRValue) {
+//        guard let putd = self.module.function(named: "puts") else {
+//            let strType = PointerType(pointee: IntType.int8)
+//            let putsType = FunctionType(argTypes: [strType], returnType: IntType.int32)
+//            let puts = self.builder.addFunction("puts", type: putsType)
+//            
+//            _ = self.builder.buildCall(puts, args: [value])
+//            
+//            return
+//        }
+//        
+//        _ = self.builder.buildCall(puts, args: [value])
+//    }
+    
+    private func derefPointer(value: IRValue) -> IRValue {
+        let kind = LLVMGetTypeKind(value.type.asLLVM())
+        
+        if kind == LLVMPointerTypeKind {
+            let load = self.builder.buildLoad(value)
+            return derefPointer(value: load)
+        }
+        
+        return value
+    }
+    
+    private func fmtString(value: IRValue, type: TypeProtocol) throws -> String {
+        let kind = LLVMGetTypeKind(value.type.asLLVM())
+        var fmt = ""
+        
+        if kind == LLVMIntegerTypeKind {
+            fmt = "%d\n"
+        } else if kind == LLVMFloatTypeKind {
+            fmt = "%f\n"
+        } else if kind == LLVMPointerTypeKind {
+            let deref = derefPointer(value: value).type.asLLVM()
+            let pointeeKind = LLVMGetTypeKind(deref)
+            
+            if pointeeKind == LLVMStructTypeKind {
+                // TODO - StringValue trait
+                throw OrbitError(message: "Struct debugging is not currently supported")
+            } else {
+                return try fmtString(value: deref, type: type)
+            }
+        } else {
+            throw OrbitError(message: "Cannot debug value of type '\(type.name)'")
+        }
+        
+        return fmt
+    }
+    
+    func generateDebug(expr: DebugExpression, scope: Scope) throws -> IRValue? {
+        let valueType = try self.lookupType(expr: expr.string)
+        
+        let value = try self.generateValue(expr: expr.string, scope: scope)
+        
+        guard let printf = self.module.function(named: "printf") else {
+            throw OrbitError(message: "FATAL: No printf")
+        }
+        
+        let fmt = try fmtString(value: value, type: valueType)
+        
+        let fmtStr = self.builder.buildGlobalStringPtr(fmt)
+        
+        _ = self.builder.buildCall(printf, args: [fmtStr, value])
         
         return nil
     }
@@ -373,6 +445,7 @@ public class LLVMGenerator : CompilationPhase {
             case is ReturnStatement: return try self.generateReturn(expr: expr as! ReturnStatement, scope: scope)
             case is AssignmentStatement: return try self.generateAssignment(expr: expr as! AssignmentStatement, scope: scope)
             case is StaticCallExpression: return try self.generateStaticCall(expr: expr as! StaticCallExpression, scope: scope)
+            case is InstanceCallExpression: return try self.generateInstanceCall(expr: expr as! InstanceCallExpression, scope: scope)
             case is DebugExpression: return try self.generateDebug(expr: expr as! DebugExpression, scope: scope)
             
             default: throw OrbitError(message: "Could not evaluate expression: \(expr)")

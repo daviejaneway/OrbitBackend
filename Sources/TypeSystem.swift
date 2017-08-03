@@ -397,19 +397,29 @@ public class TypeResolver : CompilationPhase {
         let receiver = expr.receiver
         let receiverType = try resolveValueType(expr: receiver, enclosingScope: enclosingScope)
         
+        expr.receiver.assignType(type: receiverType, env: self)
+        
         let name = Mangler.mangle(name: "\(receiverType.name).\(expr.methodName.value)")
-        guard let signatureType = try enclosingScope.enclosingScope?.lookupBinding(named: name) as? SignatureType else { // expr.methodName.value
+        guard let methodType = try enclosingScope.enclosingScope?.lookupBinding(named: name) as? MethodType else { // expr.methodName.value
             throw OrbitError(message: "Call expressions are not permitted outside of method body")
         }
-
-        let argTypes = try expr.args.map { try self.resolveValueType(expr: $0, enclosingScope: enclosingScope) }
+        
+        let signatureType = methodType.signatureType
+        
+        var argTypes = try expr.args.map { try self.resolveValueType(expr: $0, enclosingScope: enclosingScope) }
+        
+        // Insert implicit self as the first param
+        argTypes.insert(receiverType, at: 0)
+        
         let expectedArgs = signatureType.argumentTypes
 
         // TODO - There's probably a better way to say this!
         guard receiverType == signatureType.receiverType else { throw OrbitError(message: "Method \(signatureType.name) does not belong to type \(receiverType.name)") }
 
         // 2nd check: have we received the correct number of args
-        guard argTypes.count == expectedArgs.count else { throw OrbitError(message: "'\(signatureType.name)' expects \(expectedArgs.count) arguments, found \(argTypes.count)") }
+        guard argTypes.count == expectedArgs.count else {
+            throw OrbitError(message: "'\(signatureType.name)' expects \(expectedArgs.count) arguments, found \(argTypes.count)")
+        }
 
         // 3rd check: are the args in the correct order (by type only, not name)
         _ = try zip(expectedArgs, argTypes).forEach { (l, r) in
