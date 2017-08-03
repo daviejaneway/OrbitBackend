@@ -97,7 +97,7 @@ public struct SignatureType : CompoundType {
         self.argumentTypes = argumentTypes
         self.returnType = returnType
         self.name = "(\(receiverType.name))(\(argumentTypes.map { $0.name }.joined(separator: ",")))(\(returnType?.name ?? ""))"
-        self.scope = scope
+        self.scope = Scope(enclosingScope: scope, scopeType: .Method)
     }
 }
 
@@ -171,7 +171,9 @@ public class Scope {
     }
     
     public func defineVariable(named: String, binding: IRBinding) throws {
-        guard !self.variables.keys.contains(named) else { throw OrbitError(message: "Attempting to redefine variable \(named)") }
+        guard !self.variables.keys.contains(named) else {
+            throw OrbitError(message: "Attempting to redefine variable \(named)")
+        }
         
         self.variables[named] = binding
     }
@@ -201,7 +203,7 @@ public struct MethodType : StatementType {
         self.name = name
         self.signatureType = signatureType
         self.enclosingAPI = enclosingAPI
-        self.scope = Scope(enclosingScope: enclosingScope, scopeType: .Method)
+        self.scope = enclosingScope
     }
 }
 
@@ -642,7 +644,7 @@ public class TypeResolver : CompilationPhase {
         
         let name = Mangler.mangle(name: "\(expr.signature.receiverType.value).\(expr.signature.name.value)")
         
-        let method = MethodType(name: expr.signature.name.value, signatureType: signatureType, enclosingAPI: enclosingAPI, enclosingScope: enclosingAPI.scope)
+        let method = MethodType(name: expr.signature.name.value, signatureType: signatureType, enclosingAPI: enclosingAPI, enclosingScope: signatureType.scope)
         
         try enclosingAPI.scope.bind(name: name, type: method)
         

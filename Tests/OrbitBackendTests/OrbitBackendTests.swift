@@ -15,6 +15,10 @@ class OrbitBackendTests : XCTestCase {
             "api Test \n" +
                 "type Main(argc Int32, argv [[Int8]]) \n" +
                 
+                "(self Int) double () (Int) " +
+                "   return self + self " +
+                "..." +
+                
                 "(self Main) main () (Int) " +
                 "   debug \"Hello, World!\" " +
                 "   return 0 " +
