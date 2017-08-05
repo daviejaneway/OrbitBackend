@@ -92,6 +92,8 @@ public class NameResolver : CompilationPhase {
     
     private var context = CompilationContext()
     
+    public init() {}
+    
     func resolveTypeDefs(api: APIExpression) throws {
         let typeDefs = api.body.filter { $0 is TypeDefExpression } as! [TypeDefExpression]
         
