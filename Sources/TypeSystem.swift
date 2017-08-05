@@ -165,7 +165,9 @@ public class Scope {
     }
     
     public func bind(name: String, type: TypeProtocol) throws {
-        guard !self.bindings.keys.contains(name) else { throw OrbitError(message: "Attempting to redeclare \(name) as \(type.name)") }
+        guard !self.bindings.keys.contains(name) else {
+            throw OrbitError(message: "Attempting to redeclare \(name) as \(type.name)")
+        }
         
         self.bindings[name] = type
     }
@@ -213,15 +215,13 @@ public struct APIType : CompoundType {
     public var exportableTypes: [TypeProtocol]
     public let name: String
     public let scope: Scope
+    public var importedModules: [Module]
     
-    init(name: String, exportableTypes: [StatementType] = []) {
+    init(name: String, exportableTypes: [StatementType] = [], importedModules: [Module] = []) {
         self.name = name
         self.exportableTypes = exportableTypes
         self.scope = Scope(enclosingScope: Scope.programScope, scopeType: .API(apiName: name))
-    }
-    
-    public func qualifyName(name: String) -> String {
-        return "\(self.name)::\(name)"
+        self.importedModules = importedModules
     }
 }
 
@@ -260,12 +260,19 @@ public struct ValueType : TypeProtocol {
 }
 
 public struct PropertyAccessType : CompoundType {
-    public let name: String = "PropertyAccess"
+    public let name: String
     
     public let receiverType: TypeDefType
     public let propertyType: TypeProtocol
     
     public let scope: Scope
+    
+    init(receiverType: TypeDefType, propertyType: TypeProtocol, scope: Scope) {
+        self.receiverType = receiverType
+        self.propertyType = propertyType
+        self.name = propertyType.name
+        self.scope = scope
+    }
 }
 
 public struct IndexAccessType : CompoundType {
@@ -292,7 +299,7 @@ public struct ReferenceType : TypeProtocol {
     type, the compiler checks that the given type exists.
  */
 public class TypeResolver : CompilationPhase {
-    public typealias InputType = RootExpression
+    public typealias InputType = APIExpression
     public typealias OutputType = [Int : TypeProtocol]
     
     private(set) var declaredTypes: [String : TypeProtocol] = [:]
@@ -318,10 +325,11 @@ public class TypeResolver : CompilationPhase {
     }
     
     func declareType(name: String, type: TypeProtocol, enclosingAPI: APIType) throws {
-        let qualifiedName = enclosingAPI.qualifyName(name: name)
-        guard !self.declaredTypes.keys.contains(qualifiedName) else { throw OrbitError(message: "Attempting to redeclare type: \(name)") }
+        guard !self.declaredTypes.keys.contains(name) else {
+            throw OrbitError(message: "Attempting to redeclare type: \(name)")
+        }
         
-        self.declaredTypes[qualifiedName] = type
+        self.declaredTypes[name] = type
     }
     
     func lookupType(name: String, enclosingAPI: APIType) throws -> TypeProtocol {
@@ -338,7 +346,7 @@ public class TypeResolver : CompilationPhase {
             case "String": return self.declaredTypes["String"]!
             
             default:
-                guard let type = self.declaredTypes[enclosingAPI.qualifyName(name: name)] else {
+                guard let type = self.declaredTypes[name] else {
                     throw OrbitError(message: "Unknown type: \(name)")
                 }
                 
@@ -387,7 +395,9 @@ public class TypeResolver : CompilationPhase {
         
         try td.constructorTypes.enumerated().forEach { constructor in
             let constructorExpression = expr.constructorSignatures[constructor.offset]
-            try enclosingAPI.scope.bind(name: "\(expr.name.value).\(constructorExpression.name.value)", type: constructor.element)
+            let parameterTypesNames = constructorExpression.parameters.map { $0.type.value }.joined(separator: ".")
+            
+            try enclosingAPI.scope.bind(name: "\(expr.name.value).\(constructorExpression.name.value).\(parameterTypesNames)", type: constructor.element)
         }
         
         return td
@@ -424,7 +434,7 @@ public class TypeResolver : CompilationPhase {
         // 3rd check: are the args in the correct order (by type only, not name)
         _ = try zip(expectedArgs, argTypes).forEach { (l, r) in
             guard l == r else {
-                throw OrbitError(message: "'\(signatureType.name)' expectd argument of \(l.name), found \(r.name)")
+                throw OrbitError(message: "'\(signatureType.name)' expected argument of \(l.name), found \(r.name)")
             }
         }
 
@@ -444,16 +454,20 @@ public class TypeResolver : CompilationPhase {
     func resolveStaticCallType(expr: StaticCallExpression, enclosingScope: Scope) throws -> TypeProtocol {
         let receiver = expr.receiver
         
-        // Resolve the callee method's type
-        
-        let name = Mangler.mangle(name: "\(receiver.value).\(expr.methodName.value)")
-        
-        guard let signatureType = try self.currentAPI.scope.lookupBinding(named: name) as? SignatureType else { // expr.methodName.value
-            throw OrbitError(message: "Call expressions are not permitted outside of method body")
-        }
-        
         let argTypes = try expr.args.map {
             try self.resolveValueType(expr: $0, enclosingScope: enclosingScope)
+        }
+        
+        let name = Mangler.mangle(name: "\(receiver.value).\(expr.methodName.value).\(argTypes.map { $0.name }.joined(separator: "."))")
+        
+        var signatureType: SignatureType
+        
+        if let methodType = try self.currentAPI.scope.lookupBinding(named: name) as? MethodType {
+            signatureType = methodType.signatureType
+        } else if let sig = try self.currentAPI.scope.lookupBinding(named: name) as? SignatureType {
+            signatureType = sig
+        } else {
+            throw OrbitError(message: "Undefined method '\(name)'")
         }
         
         let expectedArgs = signatureType.argumentTypes
@@ -469,8 +483,12 @@ public class TypeResolver : CompilationPhase {
         
         // 3rd check: are the args in the correct order (by type only, not name)
         _ = try zip(expectedArgs, argTypes).forEach { (l, r) in
-            guard l == r else {
-                throw OrbitError(message: "'\(signatureType.name)' expectd argument of \(l.name), found \(r.name)")
+            if let prop = r as? PropertyAccessType {
+                guard l == prop.propertyType else { throw OrbitError(message: "'\(signatureType.name)' expected argument of \(l.name), found \(r.name)") }
+            } else {
+                guard l == r else {
+                    throw OrbitError(message: "'\(signatureType.name)' expected argument of \(l.name), found \(r.name)")
+                }
             }
         }
         
@@ -486,46 +504,6 @@ public class TypeResolver : CompilationPhase {
         
         return type
     }
-    
-//    func resolveCallType(expr: CallExpression, receiver: Expression, enclosingScope: Scope) throws -> TypeProtocol {
-//        // Resolve the callee method's type
-//        
-//        let name = Mangler.mangle(name: "\(staticCall.receiver.value).\(expr.methodName.value)")
-//        guard let signatureType = try enclosingScope.enclosingScope?.lookupBinding(named: name) as? SignatureType else { // expr.methodName.value
-//            throw OrbitError(message: "Call expressions are not permitted outside of method body")
-//        }
-//        
-//        let argTypes = try expr.args.map { try self.resolveValueType(expr: $0, enclosingScope: enclosingScope) }
-//        let expectedArgs = signatureType.argumentTypes
-//        
-//        // 1st check: Does the receiver type match the type of the actual receiver
-//        let actualReceiverType = try self.resolveValueType(expr: receiver, enclosingScope: enclosingScope)
-//        
-//        // TODO - There's probably a better way to say this!
-//        guard actualReceiverType == signatureType.receiverType else { throw OrbitError(message: "Method \(signatureType.name) does not belong to type \(actualReceiverType.name)") }
-//        
-//        // 2nd check: have we received the correct number of args
-//        guard argTypes.count == expectedArgs.count else { throw OrbitError(message: "'\(signatureType.name)' expects \(expectedArgs.count) arguments, found \(argTypes.count)") }
-//        
-//        // 3rd check: are the args in the correct order (by type only, not name)
-//        _ = try zip(expectedArgs, argTypes).forEach { (l, r) in
-//            guard l == r else {
-//                throw OrbitError(message: "'\(signatureType.name)' expectd argument of \(l.name), found \(r.name)")
-//            }
-//        }
-//        
-//        /*
-//            This is about as much as we can check for now.
-//            When type annotations are added on the lhs of assignments,
-//            we can check the rhs return type against the lhs expected type.
-//         */
-//        
-//        let type = signatureType.returnType ?? VoidType(name: "Void", scope: enclosingScope)
-//        
-//        expr.assignType(type: type, env: self)
-//        
-//        return type
-//    }
     
     func resolveListLiteralType(expr: ListExpression, enclosingScope: Scope) throws -> ListType {
         // For now, we only have homogenous lists. When generics are working, we must revisit.
@@ -614,7 +592,11 @@ public class TypeResolver : CompilationPhase {
                 expr.assignType(type: type, env: self)
                 return type
             
-            case is IdentifierExpression: return try enclosingScope.lookupBinding(named: (expr as! IdentifierExpression).value)
+            case is IdentifierExpression:
+                let type = try enclosingScope.lookupBinding(named: (expr as! IdentifierExpression).value)
+                expr.assignType(type: type, env: self)
+                return type
+            
             case is InstanceCallExpression: return try resolveInstanceCallType(expr: expr as! InstanceCallExpression, enclosingScope: enclosingScope)
             case is StaticCallExpression: return try resolveStaticCallType(expr: expr as! StaticCallExpression, enclosingScope: enclosingScope)
             case is ListExpression: return try resolveListLiteralType(expr: expr as! ListExpression, enclosingScope: enclosingScope)
@@ -630,7 +612,7 @@ public class TypeResolver : CompilationPhase {
     
     func resolveStaticSignature(expr: StaticSignatureExpression, enclosingAPI: APIType) throws -> SignatureType {
         let receiverType = try self.resolveTypeIdentifier(expr: expr.receiverType, enclosingAPI: enclosingAPI)
-        let argumentTypes = try expr.parameters.map { $0.type }.map { try self.resolveTypeIdentifier(expr: $0, enclosingAPI: enclosingAPI) }
+        let argumentTypes: [TypeProtocol] = try expr.parameters.map { $0.type }.map { try self.resolveTypeIdentifier(expr: $0, enclosingAPI: enclosingAPI) }
         
         guard let ret = expr.returnType else {
             let type = SignatureType(receiverType: receiverType, argumentTypes: argumentTypes, returnType: nil, scope: enclosingAPI.scope)
@@ -652,8 +634,7 @@ public class TypeResolver : CompilationPhase {
     func resolveMethodType(expr: MethodExpression, enclosingAPI: APIType) throws -> MethodType {
         let signatureType = try self.resolveStaticSignature(expr: expr.signature, enclosingAPI: enclosingAPI)
         
-        let name = Mangler.mangle(name: "\(expr.signature.receiverType.value).\(expr.signature.name.value)")
-        
+        let name = expr.signature.name.value
         let method = MethodType(name: expr.signature.name.value, signatureType: signatureType, enclosingAPI: enclosingAPI, enclosingScope: signatureType.scope)
         
         try enclosingAPI.scope.bind(name: name, type: method)
@@ -737,6 +718,29 @@ public class TypeResolver : CompilationPhase {
         
         self.currentAPI = api
         
+        // Parse and type check any import apis
+        
+//        let source = SourceResolver()
+//        let lexer = Lexer()
+//        let parser = Parser()
+//        
+//        let tr = TypeResolver()
+//        
+//        let lexParseChain = CompilationChain(inputPhase: lexer, outputPhase: parser)
+//        let frontend = CompilationChain(inputPhase: source, outputPhase: lexParseChain)
+        
+        // NOTE - We currently only allow 1 api per file
+        // We can allow multiple apis per file in theory
+//        let modules: [Module] = try expr.importPaths.map {
+//            let ast = try frontend.execute(input: $0.value)
+//            let api = ast.body[0] as! APIExpression
+//            
+//            let gen = LLVMGenerator(apiName: api.name.value, isMain: false)
+//            let tm = try tr.execute(input: ast)
+//            
+//            return try gen.execute(input: (typeMap: tm, ast: api))
+//        }
+        
         var exportableTypes: [TypeProtocol] = []
         for e in expr.body {
             let type = try self.resolveStatementType(expr: e as! ExportableExpression, enclosingType: api)
@@ -744,6 +748,7 @@ public class TypeResolver : CompilationPhase {
             exportableTypes.append(type)
         }
         
+        //api.importedModules = modules
         api.exportableTypes = exportableTypes
         
         return api
@@ -757,13 +762,15 @@ public class TypeResolver : CompilationPhase {
         }
     }
     
-    public func execute(input: RootExpression) throws -> [Int : TypeProtocol] {
-        var topLevelTypes: [TypeProtocol] = []
-        for expr in input.body {
-            let type = try self.resolveTopLevelType(expr: expr)
-            
-            topLevelTypes.append(type)
-        }
+    public func execute(input: APIExpression) throws -> [Int : TypeProtocol] {
+//        var topLevelTypes: [TypeProtocol] = []
+//        for expr in input.body {
+//            let type = try self.resolveTopLevelType(expr: expr)
+//            
+//            topLevelTypes.append(type)
+//        }
+        
+        _ = try self.resolveAPIType(expr: input)
         
         return self.expressionTypeMap
     }

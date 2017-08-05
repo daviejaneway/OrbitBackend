@@ -54,16 +54,16 @@ class BuiltIn {
     }
 }
 
-struct Name : Hashable {
-    let relativeName: String
-    let absoluteName: String
+public struct Name : Hashable {
+    public let relativeName: String
+    public let absoluteName: String
     
-    var hashValue: Int {
+    public var hashValue: Int {
         return relativeName.hashValue ^ absoluteName.hashValue &* 16777619
     }
     
-    static func ==(lhs: Name, rhs: Name) -> Bool {
-        return lhs.absoluteName == rhs.absoluteName || lhs.relativeName == rhs.relativeName
+    public static func ==(lhs: Name, rhs: Name) -> Bool {
+        return lhs.absoluteName == rhs.absoluteName && lhs.relativeName == rhs.relativeName
     }
 }
 
@@ -74,8 +74,10 @@ public class Mangler {
     }
 }
 
+public typealias GeneratorInput = (context: CompilationContext, typeMap: [Int : TypeProtocol], ast: APIExpression)
+
 public class LLVMGenerator : CompilationPhase {
-    public typealias InputType = (typeMap: [Int : TypeProtocol], ast: APIExpression)
+    public typealias InputType = GeneratorInput
     public typealias OutputType = Module
     
     private let builder: IRBuilder
@@ -143,7 +145,9 @@ public class LLVMGenerator : CompilationPhase {
     }
     
     func lookupFunction(named: String) throws -> Function {
-        guard let fn = self.module.function(named: named) else { throw OrbitError(message: "Undefined function: \(named)") }
+        guard let fn = self.module.function(named: named) else {
+            throw OrbitError(message: "Undefined function: \(named)")
+        }
         
         return fn
     }
@@ -171,10 +175,11 @@ public class LLVMGenerator : CompilationPhase {
         
         try expr.constructorSignatures.forEach { signature in
             let fnType = try self.generateSharedMethodComponents(expr: signature)
-            let fn = self.builder.addFunction("\(type.name).\(signature.name.value)", type: fnType)
-            _ = self.generateEntryBlock(function: fn)
             
-            let propertyTypes = try signature.parameters.map { try self.lookupLLVMType(hashValue: $0.type.hashValue) }
+            let argTypeNames = signature.parameters.map { $0.type.value }.joined(separator: ".")
+            
+            let fn = self.builder.addFunction("\(type.name).\(signature.name.value).\(argTypeNames)", type: fnType) // TODO - Add param types to name
+            _ = self.generateEntryBlock(function: fn)
             
             if type is ValueType {
                 _ = self.builder.buildRet(StructType.constant(values: fn.parameters))
@@ -182,8 +187,6 @@ public class LLVMGenerator : CompilationPhase {
             }
             
             let alloca = self.builder.buildAlloca(type: irType)
-            
-            // TODO - set initial properties
             
             fn.parameters.enumerated().forEach { pair in
                 let gep = self.builder.buildStructGEP(alloca, index: pair.offset)
@@ -236,13 +239,15 @@ public class LLVMGenerator : CompilationPhase {
     }
     
     func generatePropertyAccess(expr: PropertyAccessExpression, enclosingScope: Scope) throws -> IRValue {
-        guard let type = try self.lookupType(expr: expr) as? PropertyAccessType else { throw OrbitError(message: "FATAL") }
+        guard let type = try self.lookupType(expr: expr) as? PropertyAccessType else {
+            throw OrbitError(message: "FATAL")
+        }
         
         guard let idx = type.receiverType.propertyOrder[expr.propertyName.value] else {
             throw OrbitError(message: "Property '\(expr.propertyName.value)' not found for type '\(type.receiverType.name)'")
         }
         
-        let val = try self.generateValue(expr: expr.receiver, dereferencePointer: false, scope: enclosingScope)
+        let val = try self.generateValue(expr: expr.receiver, dereferencePointer: true, scope: enclosingScope)
         
         // TODO - Always dereference the GEP?
         
@@ -335,7 +340,9 @@ public class LLVMGenerator : CompilationPhase {
     }
     
     func generateStaticCall(expr: StaticCallExpression, scope: Scope) throws -> IRValue {
-        let name = Mangler.mangle(name: "\(expr.receiver.value).\(expr.methodName.value)")
+        let argTypes = try expr.args.map { try self.lookupType(expr: $0).name }.joined(separator: ".")
+        
+        let name = Mangler.mangle(name: "\(expr.receiver.value).\(expr.methodName.value).\(argTypes)")
         let fn = try self.lookupFunction(named: name)
         let args = try expr.args.map { try self.generateValue(expr: $0, scope: scope) }
         
@@ -504,13 +511,15 @@ public class LLVMGenerator : CompilationPhase {
     func generateMethod(expr: MethodExpression, signatureType: TypeProtocol, receiverName: String, functionName: String) throws {
         let funcType = try self.generateSharedMethodComponents(expr: expr.signature)
         
-        let recName = self.mangle(name: "\(receiverName)")
-        let funcName = self.mangle(name: "\(recName).\(functionName)")
-        
-        let fn = self.builder.addFunction(funcName, type: funcType)
+        let fn = self.builder.addFunction(functionName, type: funcType)
         _ = self.generateEntryBlock(function: fn)
         
         try self.generateMethodParams(params: expr.signature.parameters, function: fn, signatureType: signatureType)
+        
+        // Check for empty methods that should have a return statement
+        // And for superfluous return statements
+        try Correctness.ensureMethodReturnCorrectness(expr: expr)
+        
         try self.generateMethodBody(body: expr.body, signatureType: signatureType)
         
         if expr.signature.returnType == nil {
@@ -533,8 +542,8 @@ public class LLVMGenerator : CompilationPhase {
         
         self.builder.positionAtEnd(of: entry)
         
-        guard let userMain = self.module.function(named: "Main.main") else { throw OrbitError(message: "Expected to find method '(Main) main (Main) ()'") }
-        guard let mainType = self.module.type(named: "Main") else { throw OrbitError(message: "APIs tagged as Main Must declare a type Main(argc Int, argv [String])") }
+        guard let userMain = self.module.function(named: "Main.Main.main.Main.Main") else { throw OrbitError(message: "Expected to find method '(Main) main (Main) ()'") }
+        guard let mainType = self.module.type(named: "Main.Main") else { throw OrbitError(message: "APIs tagged as Main Must declare a type Main(argc Int, argv [String])") }
         
         let alloca = self.builder.buildAlloca(type: mainType)
         
@@ -548,7 +557,7 @@ public class LLVMGenerator : CompilationPhase {
         _ = self.builder.buildRet(IntType.int32.constant(0))
     }
     
-    public func execute(input: (typeMap: [Int : TypeProtocol], ast: APIExpression)) throws -> Module {
+    public func execute(input: (context: CompilationContext, typeMap: [Int : TypeProtocol], ast: APIExpression)) throws -> Module {
         self.typeMap = input.typeMap
         
         let typeDefs = input.ast.body.filter { $0 is TypeDefExpression }
@@ -557,7 +566,9 @@ public class LLVMGenerator : CompilationPhase {
         try typeDefs.forEach { try self.generateTypeDef(expr: $0 as! TypeDefExpression) }
         try staticMethodDefs.forEach { try self.generateStaticMethod(expr: $0 as! MethodExpression) }
         
-        try self.generateMain()
+        if input.context.hasMain {
+            try self.generateMain()
+        }
         
         return self.module
     }

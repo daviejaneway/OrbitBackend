@@ -17,7 +17,7 @@
       "package": "OrbitFrontend",
       "reason": null,
       "repositoryURL": "https://github.com/daviejaneway/OrbitFrontend.git",
-      "version": "0.0.27"
+      "version": "0.0.39"
     },
     {
       "package": "SwiftyJSON",
