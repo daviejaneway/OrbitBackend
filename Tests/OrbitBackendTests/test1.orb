@@ -1,20 +1,9 @@
-api Foo
-    type Foo()
-...
-
 api Main
-    with "/usr/local/lib/Orbit/Bootstrap.orb"
 
     type Main(argc Int32, argv [[Int8]])
-    type Bar(foo Foo)
-
+    
     (self Main) main () (Int)
-        debug self.argc
-
-        f = Foo()
-        b = Bar(f)
-
-        BuiltIn.print(self.argc)
+        debug self.argv[0]
 
         return 0
     ...

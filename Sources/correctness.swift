@@ -16,15 +16,15 @@ class Correctness {
         let returnStatements = expr.body.filter { $0 is ReturnStatement }
         
         // Superfluous return statements are not allowed
-        guard returnStatements.count < 2 else { throw OrbitError(message: "Multiple return statements found in method '\(expr.signature.name.value)'") }
+        guard returnStatements.count < 2 else { throw OrbitError(message: "Multiple return statements found in method '\(expr.signature.name.value)'", position: expr.startToken.position) }
         
         guard let ret = expr.signature.returnType else {
-            guard returnStatements.count == 0 else { throw OrbitError(message: "Method '\(expr.signature.name.value)' does not declare a return type but contains a return statement") }
+            guard returnStatements.count == 0 else { throw OrbitError(message: "Method '\(expr.signature.name.value)' does not declare a return type but contains a return statement", position: expr.startToken.position) }
             
             return
         }
         
         // Method declares a return type but has no return statement
-        guard returnStatements.count == 1 else { throw OrbitError(message: "Method '\(expr.signature.name.value)' must return a value of type '\(ret.value)'") }
+        guard returnStatements.count == 1 else { throw OrbitError(message: "Method '\(expr.signature.name.value)' must return a value of type '\(ret.value)'", position: expr.startToken.position) }
     }
 }

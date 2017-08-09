@@ -4,6 +4,12 @@ import OrbitFrontend
 import LLVM
 import cllvm
 
+extension OrbitError {
+    convenience init(message: String, position: SourcePosition) {
+        self.init(message: "\(message)\(position)")
+    }
+}
+
 public struct IRBinding {
     let ref: IRValue
     
@@ -110,33 +116,33 @@ public class LLVMGenerator : CompilationPhase {
         return Mangler.mangle(name: name)
     }
     
-    func defineLLVMType(type: TypeProtocol, llvmType: IRType) throws {
+    func defineLLVMType(type: TypeProtocol, llvmType: IRType, position: SourcePosition) throws {
         let relativeNames = self.llvmTypeMap.keys.map { $0.relativeName }
-        guard !relativeNames.contains(type.name) else { throw OrbitError(message: "Attempted to redefine type '\(type.name)'") }
+        guard !relativeNames.contains(type.name) else { throw OrbitError(message: "Attempted to redefine type '\(type.name)'", position: position) }
         
         let absoluteNames = self.llvmTypeMap.keys.map { $0.absoluteName }
-        guard !absoluteNames.contains(type.name) else { throw OrbitError(message: "Attempted to redefine type '\(type.name)'") }
+        guard !absoluteNames.contains(type.name) else { throw OrbitError(message: "Attempted to redefine type '\(type.name)'", position: position) }
         
         try self.llvmTypeMap[Name(relativeName: type.name, absoluteName: type.absoluteName())] = llvmType
     }
     
     func lookupType(expr: Expression) throws -> TypeProtocol {
         guard let type = self.typeMap[expr.hashValue] else {
-            throw OrbitError(message: "Type of expression '\(expr)' could not be deduced")
+            throw OrbitError(message: "Type of expression '\(expr)' could not be deduced", position: expr.startToken.position)
         }
         
         return type
     }
     
-    func lookupLLVMType(type: TypeProtocol) throws -> IRType {
+    func lookupLLVMType(type: TypeProtocol, position: SourcePosition) throws -> IRType {
         if let listType = type as? ListType {
-            let elementType = try lookupLLVMType(type: listType.elementType)
+            let elementType = try lookupLLVMType(type: listType.elementType, position: position)
             
             return PointerType(pointee: elementType)
         }
         
         guard let t = self.llvmTypeMap[try type.fullName()] else {
-            throw OrbitError(message: "Unknown type: \(type.name)")
+            throw OrbitError(message: "Unknown type: \(type.name)", position: position)
         }
         
         guard type is ValueType else { return PointerType(pointee: t) }
@@ -144,32 +150,32 @@ public class LLVMGenerator : CompilationPhase {
         return t
     }
     
-    func lookupFunction(named: String) throws -> Function {
+    func lookupFunction(named: String, position: SourcePosition) throws -> Function {
         guard let fn = self.module.function(named: named) else {
-            throw OrbitError(message: "Undefined function: \(named)")
+            throw OrbitError(message: "Undefined function: \(named)", position: position)
         }
         
         return fn
     }
     
-    func lookupLLVMType(hashValue: Int) throws -> IRType {
+    func lookupLLVMType(hashValue: Int, position: SourcePosition) throws -> IRType {
         guard let type = self.typeMap[hashValue] else {
             throw OrbitError(message: "FATAL")
         }
         
-        return try self.lookupLLVMType(type: type)
+        return try self.lookupLLVMType(type: type, position: position)
     }
     
     func generateTypeDef(expr: TypeDefExpression) throws {
         let type = try self.lookupType(expr: expr)
         
         let propertyTypes = try expr.properties.map { pair in
-            return try self.lookupLLVMType(hashValue: pair.type.hashValue)
+            return try self.lookupLLVMType(hashValue: pair.type.hashValue, position: expr.startToken.position)
         }
         
         let irType = self.builder.createStruct(name: type.name, types: propertyTypes)
         
-        try self.defineLLVMType(type: type, llvmType: irType)
+        try self.defineLLVMType(type: type, llvmType: irType, position: expr.startToken.position)
         
         // Auto-generate constructor methods
         
@@ -222,7 +228,7 @@ public class LLVMGenerator : CompilationPhase {
         // We might generate ASCII aliases for operators in the future, not sure I like quoted identifiers
         let opName = "\(expr.op.symbol)"
         
-        let fn = try self.lookupFunction(named: opName)
+        let fn = try self.lookupFunction(named: opName, position: expr.startToken.position)
         let call = self.builder.buildCall(fn, args: [left, right])
         
         // `call` holds the result of `left op right` (really `op(left, right)`)
@@ -233,7 +239,7 @@ public class LLVMGenerator : CompilationPhase {
         // TODO - For now, all variables are pointers.
         // Value types will come later.
         
-        let ptr = try enclosingScope.lookupVariable(named: expr.value)
+        let ptr = try enclosingScope.lookupVariable(named: expr.value, position: expr.startToken.position)
         
         return dereference ? ptr.read() : ptr.ref
     }
@@ -244,7 +250,7 @@ public class LLVMGenerator : CompilationPhase {
         }
         
         guard let idx = type.receiverType.propertyOrder[expr.propertyName.value] else {
-            throw OrbitError(message: "Property '\(expr.propertyName.value)' not found for type '\(type.receiverType.name)'")
+            throw OrbitError(message: "Property '\(expr.propertyName.value)' not found for type '\(type.receiverType.name)'", position: expr.startToken.position)
         }
         
         let val = try self.generateValue(expr: expr.receiver, dereferencePointer: true, scope: enclosingScope)
@@ -259,7 +265,7 @@ public class LLVMGenerator : CompilationPhase {
     func generateList(expr: ListExpression, scope: Scope) throws -> IRValue {
         let listType = try self.lookupType(expr: expr) as! ListType
         //let arrType = try self.lookupLLVMType(type: listType)
-        let elementType = try self.lookupLLVMType(type: listType.elementType)
+        let elementType = try self.lookupLLVMType(type: listType.elementType, position: expr.startToken.position)
         //let elementPtrType = PointerType(pointee: elementType)
         let values = try expr.value.map { try self.generateValue(expr: $0, dereferencePointer: true, scope: scope) }
         
@@ -315,7 +321,7 @@ public class LLVMGenerator : CompilationPhase {
             case is StaticCallExpression: return try self.generateStaticCall(expr: expr as! StaticCallExpression, scope: scope)
             case is InstanceCallExpression: return try self.generateInstanceCall(expr: expr as! InstanceCallExpression, scope: scope)
             
-            default: throw OrbitError(message: "Expression \((expr as! GroupableExpression).dump()) does not yield a value")
+            default: throw OrbitError(message: "Expression \((expr as! GroupableExpression).dump()) does not yield a value", position: expr.startToken.position)
         }
     }
     
@@ -330,11 +336,11 @@ public class LLVMGenerator : CompilationPhase {
         
         let valueType = try self.lookupType(expr: expr.value)
         
-        let irType = try self.lookupLLVMType(type: valueType)
+        let irType = try self.lookupLLVMType(type: valueType, position: expr.startToken.position)
         let value = try self.generateValue(expr: expr.value, scope: scope)
         let binding = IRBinding.create(builder: self.builder, type: valueType, irType: irType, name: expr.name.value, initial: value)
         
-        try scope.defineVariable(named: expr.name.value, binding: binding)
+        try scope.defineVariable(named: expr.name.value, binding: binding, position: expr.startToken.position)
         
         return value
     }
@@ -343,7 +349,7 @@ public class LLVMGenerator : CompilationPhase {
         let argTypes = try expr.args.map { try self.lookupType(expr: $0).name }.joined(separator: ".")
         
         let name = Mangler.mangle(name: "\(expr.receiver.value).\(expr.methodName.value).\(argTypes)")
-        let fn = try self.lookupFunction(named: name)
+        let fn = try self.lookupFunction(named: name, position: expr.startToken.position)
         let args = try expr.args.map { try self.generateValue(expr: $0, scope: scope) }
         
         return self.builder.buildCall(fn, args: args)
@@ -352,7 +358,7 @@ public class LLVMGenerator : CompilationPhase {
     func generateInstanceCall(expr: InstanceCallExpression, scope: Scope) throws -> IRValue {
         let receiverType = try self.lookupType(expr: expr.receiver)
         let name = Mangler.mangle(name: "\(receiverType.name).\(expr.methodName.value)")
-        let fn = try self.lookupFunction(named: name)
+        let fn = try self.lookupFunction(named: name, position: expr.startToken.position)
         let selfValue = try self.generateValue(expr: expr.receiver, scope: scope)
         var args = [selfValue]
         
@@ -403,7 +409,7 @@ public class LLVMGenerator : CompilationPhase {
         return value
     }
     
-    private func fmtString(value: IRValue, type: TypeProtocol) throws -> String {
+    private func fmtString(value: IRValue, type: TypeProtocol, position: SourcePosition) throws -> String {
         let kind = LLVMGetTypeKind(value.type.asLLVM())
         var fmt = ""
         
@@ -412,8 +418,9 @@ public class LLVMGenerator : CompilationPhase {
         } else if kind == LLVMFloatTypeKind {
             fmt = "%f\n"
         } else if kind == LLVMPointerTypeKind {
-            let deref = derefPointer(value: value).type.asLLVM()
-            let pointeeKind = LLVMGetTypeKind(deref)
+            let deref = derefPointer(value: value)
+            
+            let pointeeKind = LLVMGetTypeKind(deref.type.asLLVM())
             
             if type == ReferenceType.StringType {
                 return "%s\n"
@@ -421,27 +428,26 @@ public class LLVMGenerator : CompilationPhase {
             
             if pointeeKind == LLVMStructTypeKind {
                 // TODO - StringValue trait
-                throw OrbitError(message: "Struct debugging is not currently supported")
+                throw OrbitError(message: "Struct debugging is not currently supported", position: position)
             } else {
-                return try fmtString(value: deref, type: type)
+                return try fmtString(value: deref, type: type, position: position)
             }
         } else {
-            throw OrbitError(message: "Cannot debug value of type '\(type.name)'")
+            throw OrbitError(message: "Cannot debug value of type '\(type.name)'", position: position)
         }
         
         return fmt
     }
     
     func generateDebug(expr: DebugExpression, scope: Scope) throws -> IRValue? {
-        let valueType = try self.lookupType(expr: expr.string)
-        
-        let value = try self.generateValue(expr: expr.string, scope: scope)
+        let valueType = try self.lookupType(expr: expr.debuggable)
+        let value = try self.generateValue(expr: expr.debuggable, scope: scope)
         
         guard let printf = self.module.function(named: "printf") else {
-            throw OrbitError(message: "FATAL: No printf")
+            throw OrbitError(message: "FATAL: No printf", position: expr.startToken.position)
         }
         
-        let fmt = try fmtString(value: value, type: valueType)
+        let fmt = try fmtString(value: value, type: valueType, position: expr.startToken.position)
         
         let fmtStr = self.builder.buildGlobalStringPtr(fmt)
         
@@ -459,14 +465,14 @@ public class LLVMGenerator : CompilationPhase {
             case is InstanceCallExpression: return try self.generateInstanceCall(expr: expr as! InstanceCallExpression, scope: scope)
             case is DebugExpression: return try self.generateDebug(expr: expr as! DebugExpression, scope: scope)
             
-            default: throw OrbitError(message: "Could not evaluate expression: \(expr)")
+            default: throw OrbitError(message: "Could not evaluate expression: \(expr)", position: expr.startToken.position)
         }
     }
     
     func generateSharedMethodComponents(expr: StaticSignatureExpression) throws -> FunctionType {
         let argTypes: [IRType] = try expr.parameters.map { param in
             //let type = try self.lookupType(expr: param.type)
-            let irType = try self.lookupLLVMType(hashValue: param.type.hashValue)
+            let irType = try self.lookupLLVMType(hashValue: param.type.hashValue, position: expr.startToken.position)
             
             //guard type is ValueType else { return PointerType(pointee: irType) }
             
@@ -476,7 +482,7 @@ public class LLVMGenerator : CompilationPhase {
         var retType: IRType = LLVM.VoidType()
         
         if let ret = expr.returnType {
-            retType = try self.lookupLLVMType(hashValue: ret.hashValue)
+            retType = try self.lookupLLVMType(hashValue: ret.hashValue, position: ret.startToken.position)
         }
         
         return FunctionType(argTypes: argTypes, returnType: retType)
@@ -494,11 +500,11 @@ public class LLVMGenerator : CompilationPhase {
     func generateMethodParams(params: [PairExpression], function: Function, signatureType: TypeProtocol) throws {
         try params.enumerated().forEach { (offset, element) in
             let type = try self.lookupType(expr: element.type)
-            let irType = try self.lookupLLVMType(hashValue: element.type.hashValue)
+            let irType = try self.lookupLLVMType(hashValue: element.type.hashValue, position: element.startToken.position)
             
             let binding = IRBinding.create(builder: self.builder, type: type, irType: irType, name: element.name.value, initial: function.parameters[offset])
             
-            try signatureType.scope.defineVariable(named: element.name.value, binding: binding)
+            try signatureType.scope.defineVariable(named: element.name.value, binding: binding, position: element.startToken.position)
         }
     }
     
@@ -528,7 +534,7 @@ public class LLVMGenerator : CompilationPhase {
     }
     
     func generateStaticMethod(expr: MethodExpression) throws {
-        _ = try self.lookupLLVMType(hashValue: expr.signature.receiverType.hashValue)
+        _ = try self.lookupLLVMType(hashValue: expr.signature.receiverType.hashValue, position: expr.startToken.position)
         let sigType = try self.lookupType(expr: expr.signature)
         
         try self.generateMethod(expr: expr, signatureType: sigType, receiverName: expr.signature.receiverType.value, functionName: expr.signature.name.value)
@@ -542,8 +548,13 @@ public class LLVMGenerator : CompilationPhase {
         
         self.builder.positionAtEnd(of: entry)
         
-        guard let userMain = self.module.function(named: "Main.Main.main.Main.Main") else { throw OrbitError(message: "Expected to find method '(Main) main (Main) ()'") }
-        guard let mainType = self.module.type(named: "Main.Main") else { throw OrbitError(message: "APIs tagged as Main Must declare a type Main(argc Int, argv [String])") }
+        guard let userMain = self.module.function(named: "Main.Main.main.Main.Main") else {
+            throw OrbitError(message: "Expected to find method '(Main) main (Main) ()'")
+        }
+        
+        guard let mainType = self.module.type(named: "Main.Main") else {
+            throw OrbitError(message: "APIs tagged as Main Must declare a type Main(argc Int, argv [String])")
+        }
         
         let alloca = self.builder.buildAlloca(type: mainType)
         

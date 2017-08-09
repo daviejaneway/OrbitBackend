@@ -36,25 +36,25 @@ public class CompilationContext {
         self.typeNameMap.append(Name(relativeName: "String", absoluteName: "String"))
     }
     
-    public func mapTypeName(relativeName: String, absoluteName: String) throws {
+    public func mapTypeName(relativeName: String, absoluteName: String, position: SourcePosition) throws {
         let name = Name(relativeName: relativeName, absoluteName: absoluteName)
         
         guard !self.typeNameMap.contains(name) else {
-            throw OrbitError(message: "Attempting to redefine '\(relativeName)' as '\(absoluteName)'")
+            throw OrbitError(message: "Attempting to redefine '\(relativeName)' as '\(absoluteName)'", position: position)
         }
         
         self.typeNameMap.append(name)
     }
     
-    public func absoluteName(relativeName: String) throws -> String {
+    public func absoluteName(relativeName: String, position: SourcePosition) throws -> String {
         let matches = self.typeNameMap.filter { $0.relativeName == relativeName }
         
         guard matches.count > 0 else {
-            throw OrbitError(message: "Undefined type '\(relativeName)'")
+            throw OrbitError(message: "Undefined type '\(relativeName)'", position: position)
         }
         
         guard matches.count < 2 else {
-            throw OrbitError(message: "Type '\(relativeName)' is ambigious. Potential matches:\n\t\(matches.map { $0.absoluteName }.joined(separator: "\n\t"))")
+            throw OrbitError(message: "Type '\(relativeName)' is ambigious. Potential matches:\n\t\(matches.map { $0.absoluteName }.joined(separator: "\n\t"))", position: position)
         }
         
         return matches[0].absoluteName
@@ -66,20 +66,23 @@ public class CompilationContext {
             return type.value
         }
         
-        return try absoluteName(relativeName: type.value)
+        return try absoluteName(relativeName: type.value, position: type.startToken.position)
     }
     
     public func mergeAPIs() throws -> APIExpression {
         let mains = self.apis.filter { $0.name.value.hasSuffix(".Main") || $0.name.value == "Main" }
         
-        guard mains.count < 2 else { throw OrbitError(message: "This module declares more than one Main api, which is not legal") }
+        guard mains.count < 2 else {
+            let position = mains[0].startToken.position
+            throw OrbitError(message: "This module declares more than one Main api, which is not legal", position: position)
+        }
         
         self.hasMain = mains.count == 1
         
         let typeDefs = self.apis.flatMap { $0.body.filter { $0 is TypeDefExpression } }
         let methods = self.apis.flatMap { $0.body.filter { $0 is MethodExpression } }
         
-        return APIExpression(name: "API", body: typeDefs + methods)
+        return APIExpression(name: "API", body: typeDefs + methods, startToken: self.apis[0].startToken)
     }
 }
 
@@ -101,7 +104,7 @@ public class NameResolver : CompilationPhase {
             if !typeDef.absolutised {
                 let absoluteName = "\(api.name.value).\(typeDef.name.value)"
                 
-                try self.context.mapTypeName(relativeName: typeDef.name.value, absoluteName: absoluteName)
+                try self.context.mapTypeName(relativeName: typeDef.name.value, absoluteName: absoluteName, position: typeDef.startToken.position)
                 
                 typeDef.absolutise(absoluteName: absoluteName)
                 
@@ -208,16 +211,18 @@ public class NameResolver : CompilationPhase {
         }
         
         if let within = api.within?.value {
-            guard within != api.name.value else { throw OrbitError(message: "Attempting to export API '\(within)' into itself") }
+            guard within != api.name.value else { throw OrbitError(message: "Attempting to export API '\(within)' into itself", position: api.startToken.position) }
             
             // Check the api exists in the given api list
             let matches = self.apiExpressions.filter { $0.name.value == within }
             
             guard matches.count > 0 else {
-                throw OrbitError(message: "Could not find an API named '\(within)'")
+                throw OrbitError(message: "Could not find an API named '\(within)'", position: api.startToken.position)
             }
             
-            guard matches.count < 2 else { throw OrbitError(message: "The name '\(within)' refers to multiple APIs") }
+            guard matches.count < 2 else {
+                throw OrbitError(message: "The name '\(within)' refers to multiple APIs", position: matches[0].startToken.position)
+            }
             
             let parentAPI = matches[0]
             
