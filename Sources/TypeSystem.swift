@@ -278,13 +278,21 @@ public struct PropertyAccessType : CompoundType {
 }
 
 public struct IndexAccessType : CompoundType {
-    public let name: String = "IndexAccess"
+    public let name: String
     
     public let receiverType: TypeProtocol
     public let indexTypes: [TypeProtocol]
     public let elementType: TypeProtocol
     
     public let scope: Scope
+    
+    init(receiverType: TypeProtocol, indexTypes: [TypeProtocol], elementType: TypeProtocol, scope: Scope) {
+        self.receiverType = receiverType
+        self.indexTypes = indexTypes
+        self.elementType = elementType
+        self.name = elementType.name
+        self.scope = scope
+    }
 }
 
 public struct ReferenceType : TypeProtocol {
@@ -455,11 +463,22 @@ public class TypeResolver : CompilationPhase {
         return type
     }
     
+    private func unwrapCompoundType(type: TypeProtocol) -> TypeProtocol {
+        if let prop = type as? PropertyAccessType {
+            return unwrapCompoundType(type: prop.propertyType)
+        } else if let idx = type as? IndexAccessType {
+            return unwrapCompoundType(type: idx.elementType)
+        }
+        
+        return type
+    }
+    
     func resolveStaticCallType(expr: StaticCallExpression, enclosingScope: Scope) throws -> TypeProtocol {
         let receiver = expr.receiver
         
-        let argTypes = try expr.args.map {
-            try self.resolveValueType(expr: $0, enclosingScope: enclosingScope)
+        let argTypes: [TypeProtocol] = try expr.args.map {
+            let type = try self.resolveValueType(expr: $0, enclosingScope: enclosingScope)
+            return unwrapCompoundType(type: type)
         }
         
         let name = Mangler.mangle(name: "\(receiver.value).\(expr.methodName.value).\(argTypes.map { $0.name }.joined(separator: "."))")
@@ -491,14 +510,8 @@ public class TypeResolver : CompilationPhase {
         
         // 3rd check: are the args in the correct order (by type only, not name)
         _ = try zip(expectedArgs, argTypes).forEach { (l, r) in
-            if let prop = r as? PropertyAccessType {
-                guard l == prop.propertyType else {
-                    throw OrbitError(message: "'\(signatureType.name)' expected argument of \(l.name), found \(r.name)", position: expr.startToken.position)
-                }
-            } else {
-                guard l == r else {
-                    throw OrbitError(message: "'\(signatureType.name)' expected argument of \(l.name), found \(r.name)", position: expr.startToken.position)
-                }
+            guard l == r else {
+                throw OrbitError(message: "'\(signatureType.name)' expected argument of \(l.name), found \(r.name)", position: expr.startToken.position)
             }
         }
         
@@ -566,14 +579,8 @@ public class TypeResolver : CompilationPhase {
         return try self.resolveValueType(expr: expr.receiver, enclosingScope: enclosingScope)
     }
     
-    func resolvePropertyAccessType(expr: PropertyAccessExpression, enclosingScope: Scope) throws -> PropertyAccessType {
-        var receiverType: TypeDefType
-        
-        if expr.receiver is PropertyAccessExpression {
-            receiverType = try resolvePropertyAccessType(expr: expr.receiver as! PropertyAccessExpression, enclosingScope: enclosingScope).propertyType as! TypeDefType
-        } else {
-            receiverType = try resolveValueType(expr: expr.receiver, enclosingScope: enclosingScope) as! TypeDefType
-        }
+    func resolvePropertyAccessType(expr: PropertyAccessExpression, enclosingScope: Scope) throws -> TypeProtocol {
+        let receiverType = try resolveValueType(expr: expr.receiver, enclosingScope: enclosingScope) as! TypeDefType
         
         guard let propertyType = receiverType.propertyTypes[expr.propertyName.value] else {
             throw OrbitError(message: "Type '\(receiverType.name)' has no properties named '\(expr.propertyName.value)'", position: expr.startToken.position)
@@ -587,17 +594,7 @@ public class TypeResolver : CompilationPhase {
     }
     
     func resolveIndexAccessType(expr: IndexAccessExpression, enclosingScope: Scope) throws -> TypeProtocol {
-        var rType = try resolveValueType(expr: expr.receiver, enclosingScope: enclosingScope)
-        
-        if let prop = rType as? PropertyAccessType {
-            rType = prop.propertyType
-        } else {
-            guard let receiverType = rType as? CollectionType else {
-                throw OrbitError(message: "Attempting to index non collection type '\(rType.name)'", position: expr.startToken.position)
-            }
-            
-            rType = receiverType
-        }
+        let rType = try resolveValueType(expr: expr.receiver, enclosingScope: enclosingScope)
         
         let indexTypes = try expr.indices.map { try resolveValueType(expr: $0, enclosingScope: enclosingScope) }
         let type = IndexAccessType(receiverType: rType, indexTypes: indexTypes, elementType: rType, scope: enclosingScope)
@@ -688,12 +685,7 @@ public class TypeResolver : CompilationPhase {
                 if let ret = e as? ReturnStatement {
                     var retType = try self.resolveValueType(expr: ret.value, enclosingScope: method.scope)
                     
-                    if let access = retType as? PropertyAccessType {
-                        // Cheeky hack to help maintain info about property order etc
-                        retType = access.propertyType
-                    } else if let access = retType as? IndexAccessType {
-                        retType = access.receiverType
-                    }
+                    retType = unwrapCompoundType(type: retType)
                     
                     guard retType.name == rt.name else {
                         throw OrbitError(message: "Method \(signatureType.name) should return a value of type \(rt.name), found \(retType.name)", position: ret.startToken.position)
