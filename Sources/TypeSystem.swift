@@ -119,11 +119,22 @@ public struct BinaryOperatorType : CompoundType {
 
 public protocol StatementType : TypeProtocol {}
 
+public protocol TypeLikeType : StatementType {
+    var propertyTypes: [String : TypeProtocol] { get }
+}
+
 public struct TypeDefType : StatementType {
     public let name: String
     public let propertyTypes: [String : TypeProtocol]
     public let propertyOrder: [String : Int]
     public var constructorTypes: [SignatureType]
+    public let scope: Scope
+}
+
+public struct TraitDefType : StatementType {
+    public let name: String
+    public let propertyTypes: [String : TypeProtocol]
+    // TODO - Method signatures
     public let scope: Scope
 }
 
@@ -390,10 +401,38 @@ public class TypeResolver : CompilationPhase {
         return type
     }
     
+    func resolveTraitDefType(expr: TraitDefExpression, enclosingAPI: APIType) throws -> StatementType {
+        let propertyTypes = try expr.properties.map { try ($0.name.value, self.resolvePairType(expr: $0, enclosingAPI: enclosingAPI)) }
+        let trait = TraitDefType(name: expr.name.value, propertyTypes: Dictionary(keyValuePairs: propertyTypes), scope: enclosingAPI.scope)
+        
+        try self.declareType(name: expr.name.value, type: trait, enclosingAPI: enclosingAPI, position: expr.startToken.position)
+        
+        return trait
+    }
+    
     func resolveTypeDefType(expr: TypeDefExpression, enclosingAPI: APIType) throws -> StatementType {
         let propertyTypes = try expr.properties.map { try ($0.name.value, self.resolvePairType(expr: $0, enclosingAPI: enclosingAPI)) }
         
         var td = TypeDefType(name: expr.name.value, propertyTypes: Dictionary(keyValuePairs: propertyTypes), propertyOrder: expr.propertyOrder, constructorTypes: [], scope: enclosingAPI.scope)
+        
+        
+        // Check trait conformance
+        try expr.adoptedTraits.forEach { trait in
+            let traitType = try self.resolveTypeIdentifier(expr: trait, enclosingAPI: enclosingAPI) as! TraitDefType
+            
+            for (name, type) in traitType.propertyTypes {
+                let matches = expr.properties.filter { $0.name.value == name }
+                
+                guard matches.count > 0 else { throw OrbitError(message: "Type \(expr.name.value) is missing property '\(name)' as declared in trait \(trait.value)", position: trait.startToken.position) }
+                
+                guard matches.count < 2 else { throw OrbitError(message: "Found multiple properties named '\(name)' for type '\(expr.name.value)'", position: trait.startToken.position) }
+                
+                let pair = matches[0]
+                let actualType = try self.resolveTypeIdentifier(expr: pair.type, enclosingAPI: enclosingAPI)
+                
+                guard actualType == type else { throw OrbitError(message: "Property '\(name)' must be of type '\(type.name)', as declared in trait '\(trait.value)'", position: pair.name.startToken.position) }
+            }
+        }
         
         try self.declareType(name: expr.name.value, type: td, enclosingAPI: enclosingAPI, position: expr.startToken.position)
         
@@ -594,10 +633,12 @@ public class TypeResolver : CompilationPhase {
     }
     
     func resolveIndexAccessType(expr: IndexAccessExpression, enclosingScope: Scope) throws -> TypeProtocol {
-        let rType = try resolveValueType(expr: expr.receiver, enclosingScope: enclosingScope)
+        guard let rType = try resolveValueType(expr: expr.receiver, enclosingScope: enclosingScope) as? CollectionType else {
+            throw OrbitError(message: "Attempting to index non-collection type", position: expr.startToken.position)
+        }
         
         let indexTypes = try expr.indices.map { try resolveValueType(expr: $0, enclosingScope: enclosingScope) }
-        let type = IndexAccessType(receiverType: rType, indexTypes: indexTypes, elementType: rType, scope: enclosingScope)
+        let type = IndexAccessType(receiverType: rType, indexTypes: indexTypes, elementType: rType.elementType, scope: enclosingScope)
         
         expr.assignType(type: type, env: self)
         
@@ -724,6 +765,7 @@ public class TypeResolver : CompilationPhase {
     
     func resolveStatementType(expr: Expression, enclosingType: TypeProtocol) throws -> TypeProtocol {
         switch expr {
+            case is TraitDefExpression: return try self.resolveTraitDefType(expr: expr as! TraitDefExpression, enclosingAPI: enclosingType as! APIType)
             case is TypeDefExpression: return try self.resolveTypeDefType(expr: expr as! TypeDefExpression, enclosingAPI: enclosingType as! APIType)
             
             case is MethodExpression: return try self.resolveMethodType(expr: expr as! MethodExpression, enclosingAPI: enclosingType as! APIType)
@@ -744,29 +786,6 @@ public class TypeResolver : CompilationPhase {
         
         self.currentAPI = api
         
-        // Parse and type check any import apis
-        
-//        let source = SourceResolver()
-//        let lexer = Lexer()
-//        let parser = Parser()
-//        
-//        let tr = TypeResolver()
-//        
-//        let lexParseChain = CompilationChain(inputPhase: lexer, outputPhase: parser)
-//        let frontend = CompilationChain(inputPhase: source, outputPhase: lexParseChain)
-        
-        // NOTE - We currently only allow 1 api per file
-        // We can allow multiple apis per file in theory
-//        let modules: [Module] = try expr.importPaths.map {
-//            let ast = try frontend.execute(input: $0.value)
-//            let api = ast.body[0] as! APIExpression
-//            
-//            let gen = LLVMGenerator(apiName: api.name.value, isMain: false)
-//            let tm = try tr.execute(input: ast)
-//            
-//            return try gen.execute(input: (typeMap: tm, ast: api))
-//        }
-        
         var exportableTypes: [TypeProtocol] = []
         for e in expr.body {
             let type = try self.resolveStatementType(expr: e as! ExportableExpression, enclosingType: api)
@@ -774,7 +793,6 @@ public class TypeResolver : CompilationPhase {
             exportableTypes.append(type)
         }
         
-        //api.importedModules = modules
         api.exportableTypes = exportableTypes
         
         return api

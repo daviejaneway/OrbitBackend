@@ -60,6 +60,11 @@ class BuiltIn {
     }
 }
 
+public enum NameMode {
+    case Relative
+    case Absolute
+}
+
 public struct Name : Hashable {
     public let relativeName: String
     public let absoluteName: String

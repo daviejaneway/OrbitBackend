@@ -18,11 +18,32 @@ func +<T>( lhs: [T], rhs: T) -> [T] {
     return lhs
 }
 
+extension Array where Element == Name {
+    subscript(index: String, mode: NameMode) -> [Element] {
+        get {
+            if mode == .Absolute {
+                return self.filter { $0.absoluteName == index }
+            } else {
+                return self.filter { $0.relativeName == index }
+            }
+        } set(newValue) {
+            
+        }
+    }
+}
+
 public class CompilationContext {
     private(set) public var typeNameMap = [Name]() // Maps a type's relative name to its fully resolved name
     
+    public var methodNameMap = [Name]() // Maps a method's absolute name to its relative name
+    
     public var apis = [APIExpression]()
     private(set) public var hasMain: Bool = false
+    
+    public var typeMethodMaps = [TypeMethodMap]()
+    public var traitMethodMaps = [TraitMethodMap]()
+    
+    public var generatedMethods = [Expression]()
     
     public init() {
         self.typeNameMap.append(Name(relativeName: "Int", absoluteName: "Int"))
@@ -79,10 +100,13 @@ public class CompilationContext {
         
         self.hasMain = mains.count == 1
         
+        let traitDefs = self.apis.flatMap { $0.body.filter { $0 is TraitDefExpression } }
         let typeDefs = self.apis.flatMap { $0.body.filter { $0 is TypeDefExpression } }
         let methods = self.apis.flatMap { $0.body.filter { $0 is MethodExpression } }
         
-        return APIExpression(name: "API", body: typeDefs + methods, startToken: self.apis[0].startToken)
+        // Order is important here
+        let body = traitDefs + typeDefs + generatedMethods + methods
+        return APIExpression(name: "API", body: body, startToken: self.apis[0].startToken)
     }
 }
 
@@ -113,12 +137,42 @@ public class NameResolver : CompilationPhase {
                     
                     property.type.absolutise(absoluteName: propertyType)
                 }
+                
+                try typeDef.adoptedTraits.forEach { trait in
+                    let traitName = try self.context.absoluteName(type: trait)
+                    
+                    trait.absolutise(absoluteName: traitName)
+                }
+            }
+        }
+    }
+    
+    func resolveTraitDefs(api: APIExpression) throws {
+        let traitDefs = api.body.filter { $0 is TraitDefExpression } as! [TraitDefExpression]
+        
+        for traitDef in traitDefs {
+            if !traitDef.absolutised {
+                let absoluteName = "\(api.name.value).\(traitDef.name.value)"
+                
+                try self.context.mapTypeName(relativeName: traitDef.name.value, absoluteName: absoluteName, position: traitDef.startToken.position)
+                
+                traitDef.absolutise(absoluteName: absoluteName)
+                
+                try traitDef.properties.forEach { property in
+                    let propertyType = try self.context.absoluteName(type: property.type)
+                    
+                    property.type.absolutise(absoluteName: propertyType)
+                }
             }
         }
     }
     
     func resolveStaticCall(expr: StaticCallExpression) throws {
         let receiverTypeName = try self.context.absoluteName(type: expr.receiver)
+        
+        try expr.args.forEach {
+            try resolveValueExpression(expr: $0)
+        }
         
         expr.receiver.absolutise(absoluteName: receiverTypeName)
     }
@@ -127,9 +181,18 @@ public class NameResolver : CompilationPhase {
 //        let receiverTypeName = try self.context.absoluteName(type: expr.receiver)
 //    }
     
+    func resolveListExpression(expr: ListExpression) throws {
+        try expr.value.forEach {
+            try resolveValueExpression(expr: $0)
+        }
+    }
+    
     func resolveValueExpression(expr: Expression) throws {
+        // TODO - Fill in the missing expressions types here
+        
         switch expr {
             case is StaticCallExpression: try resolveStaticCall(expr: expr as! StaticCallExpression)
+            case is ListExpression: try resolveListExpression(expr: expr as! ListExpression)
             
             default: break
         }
@@ -178,7 +241,11 @@ public class NameResolver : CompilationPhase {
                 ret.absolutise(absoluteName: absoluteReturnTypeName)
             }
             
+            // Return type is not part of the signature name
             let signatureName = "\(absoluteReceiverTypeName).\(signature.name.value).\(parameterTypeNames)"
+            
+            // Abusing names to make looking up signatures easier further down the line
+            context.methodNameMap.append(Name(relativeName: signatureName, absoluteName: signature.name.value))
             
             signature.absolutise(absoluteName: signatureName)
         }
@@ -242,6 +309,7 @@ public class NameResolver : CompilationPhase {
             return absoluteName
         }
         
+        try resolveTraitDefs(api: api)
         try resolveTypeDefs(api: api)
         try resolveSignatures(api: api)
         

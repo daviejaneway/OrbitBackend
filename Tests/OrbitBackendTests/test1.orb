@@ -1,10 +1,17 @@
 api Main
     type Main(argc Int32, argv [[Int8]])
-    type Text(chars [Int8], count [Int])
+    trait A(x Int, y Int)
 
-    (self Main) main () (Int)
-        t = Text(self.argv[0], [99])
+    type B(x Int, y Int) : A
 
-        return t.count[0]
+    (A) foo (a A) ()
+        debug a.x
+    ...
+
+    (self Main) main () (Int32)
+        b = B(1, 2)
+        A.foo(b)
+
+        return self.argc
     ...
 ...
