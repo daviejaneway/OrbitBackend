@@ -20,12 +20,18 @@ public struct IRBinding {
     let irType: IRType
     
     static func create(builder: IRBuilder, type: TypeProtocol, irType: IRType, name: String, initial: IRValue, isFunctionParameter: Bool = false) -> IRBinding {
+        if isFunctionParameter {
+            let write = { builder.buildStore($0, to: initial) }
+            
+            return IRBinding(ref: initial, read: { initial }, write: write, type: type, irType: irType)
+        }
+        
         let alloca = builder.buildAlloca(type: irType, name: name)
         
         builder.buildStore(initial, to: alloca)
         
-        let read = { builder.buildLoad(alloca) }
-        let write = { builder.buildStore($0, to: alloca) }
+        let read = { return isFunctionParameter ? initial : builder.buildLoad(alloca) }
+        let write = { builder.buildStore($0, to: isFunctionParameter ? initial : alloca) }
         
         return IRBinding(ref: alloca, read: read, write: write, type: type, irType: irType)
     }
@@ -506,7 +512,7 @@ public class LLVMGenerator : CompilationPhase {
             let type = try self.lookupType(expr: element.type)
             let irType = try self.lookupLLVMType(hashValue: element.type.hashValue, position: element.startToken.position)
             
-            let binding = IRBinding.create(builder: self.builder, type: type, irType: irType, name: element.name.value, initial: function.parameters[offset])
+            let binding = IRBinding.create(builder: self.builder, type: type, irType: irType, name: element.name.value, initial: function.parameters[offset], isFunctionParameter: true)
             
             try signatureType.scope.defineVariable(named: element.name.value, binding: binding, position: element.startToken.position)
         }
