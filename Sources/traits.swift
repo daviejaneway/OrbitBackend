@@ -35,6 +35,8 @@ public class TraitResolver : CompilationPhase {
     
     private var context: CompilationContext!
     
+    public init() {}
+    
     func specialise(parameter: PairExpression) throws -> [PairExpression] {
         guard self.context.traitNames.contains(parameter.type.value) else {
             // This param is a concrete type
