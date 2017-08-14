@@ -42,13 +42,11 @@ class OrbitBackendTests : XCTestCase {
         
         context = try traitResolver.execute(input: context)
         
-        let api = try context.mergeAPIs()
-        
         let tr = TypeResolver()
-        let tm = try tr.execute(input: api)
+        context = try tr.execute(input: context)
         
-        let gen = LLVMGenerator(apiName: api.name.value)
-        let result = try gen.execute(input: (context: context, typeMap: tm, ast: api))
+        let gen = LLVMGenerator()
+        let result = try gen.execute(input: context)
         
         result.dump()
         

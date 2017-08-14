@@ -37,6 +37,8 @@ public class CompilationContext {
     
     public var methodNameMap = [Name]() // Maps a method's absolute name to its relative name
     
+    fileprivate(set) public var traitNames = [String]()
+    
     public var apis = [APIExpression]()
     private(set) public var hasMain: Bool = false
     
@@ -44,6 +46,9 @@ public class CompilationContext {
     public var traitMethodMaps = [TraitMethodMap]()
     
     public var generatedMethods = [Expression]()
+    public var expressionTypeMap = [Int : TypeProtocol]()
+    
+    private(set) public var mergedAPI: APIExpression? = nil
     
     public init() {
         self.typeNameMap.append(Name(relativeName: "Int", absoluteName: "Int"))
@@ -91,6 +96,10 @@ public class CompilationContext {
     }
     
     public func mergeAPIs() throws -> APIExpression {
+        if let merged = self.mergedAPI {
+            return merged
+        }
+        
         let mains = self.apis.filter { $0.name.value.hasSuffix(".Main") || $0.name.value == "Main" }
         
         guard mains.count < 2 else {
@@ -102,11 +111,15 @@ public class CompilationContext {
         
         let traitDefs = self.apis.flatMap { $0.body.filter { $0 is TraitDefExpression } }
         let typeDefs = self.apis.flatMap { $0.body.filter { $0 is TypeDefExpression } }
-        let methods = self.apis.flatMap { $0.body.filter { $0 is MethodExpression } }
+        //let methods = self.apis.flatMap { $0.body.filter { $0 is MethodExpression } }
         
         // Order is important here
-        let body = traitDefs + typeDefs + generatedMethods + methods
-        return APIExpression(name: "API", body: body, startToken: self.apis[0].startToken)
+        let body = traitDefs + typeDefs + generatedMethods + typeMethodMaps.flatMap { $0.methods as [Expression] } //methods
+        let api = APIExpression(name: "API", body: body, startToken: self.apis[0].startToken)
+        
+        self.mergedAPI = api
+        
+        return api
     }
 }
 
@@ -117,7 +130,7 @@ public class NameResolver : CompilationPhase {
     private var apiExpressions = [APIExpression]()
     private var relativeNames = [String]()
     
-    private var context = CompilationContext()
+    fileprivate var context = CompilationContext()
     
     public init() {}
     
@@ -157,6 +170,8 @@ public class NameResolver : CompilationPhase {
                 try self.context.mapTypeName(relativeName: traitDef.name.value, absoluteName: absoluteName, position: traitDef.startToken.position)
                 
                 traitDef.absolutise(absoluteName: absoluteName)
+                
+                self.context.traitNames.append(absoluteName)
                 
                 try traitDef.properties.forEach { property in
                     let propertyType = try self.context.absoluteName(type: property.type)

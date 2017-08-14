@@ -85,14 +85,14 @@ public class Mangler {
     }
 }
 
-public typealias GeneratorInput = (context: CompilationContext, typeMap: [Int : TypeProtocol], ast: APIExpression)
+//public typealias GeneratorInput = (context: CompilationContext, typeMap: [Int : TypeProtocol], ast: APIExpression)
 
 public class LLVMGenerator : CompilationPhase {
-    public typealias InputType = GeneratorInput
+    public typealias InputType = CompilationContext
     public typealias OutputType = Module
     
-    private let builder: IRBuilder
-    private let module: Module
+    private var builder: IRBuilder!
+    private(set) var module: Module!
     
     private var typeMap: [Int : TypeProtocol] = [:]
     private var llvmTypeMap: [Name : IRType] = [
@@ -108,14 +108,7 @@ public class LLVMGenerator : CompilationPhase {
         Name(relativeName: "String", absoluteName: "String") : IntType.int8
     ]
     
-    public init(apiName: String) {
-        self.module = Module(name: apiName)
-        self.builder = IRBuilder(module: self.module)
-        
-        // BUILT-INS
-        _ = BuiltIn.generateIntIntPlusFn(builder: self.builder)
-        _ = self.builder.addFunction("printf", type: BuiltIn.Printf)
-    }
+    public init() {}
     
     func mangle(name: String) -> String {
         return Mangler.mangle(name: name)
@@ -362,15 +355,21 @@ public class LLVMGenerator : CompilationPhase {
     
     func generateInstanceCall(expr: InstanceCallExpression, scope: Scope) throws -> IRValue {
         let receiverType = try self.lookupType(expr: expr.receiver)
-        let name = Mangler.mangle(name: "\(receiverType.name).\(expr.methodName.value)")
-        let fn = try self.lookupFunction(named: name, position: expr.startToken.position)
         let selfValue = try self.generateValue(expr: expr.receiver, scope: scope)
+        let selfType = try lookupType(expr: expr.receiver)
         var args = [selfValue]
+        var argTypes = [selfType.name]
         
         try expr.args.forEach { arg in
             let value = try self.generateValue(expr: arg, scope: scope)
             args.append(value)
+            
+            let type = try lookupType(expr: arg)
+            argTypes.append(type.name)
         }
+        
+        let name = Mangler.mangle(name: "\(receiverType.name).\(expr.methodName.value).\(argTypes.map { $0 }.joined(separator: "."))")
+        let fn = try self.lookupFunction(named: name, position: expr.startToken.position)
         
         return self.builder.buildCall(fn, args: args)
     }
@@ -573,16 +572,25 @@ public class LLVMGenerator : CompilationPhase {
         _ = self.builder.buildRet(IntType.int32.constant(0))
     }
     
-    public func execute(input: (context: CompilationContext, typeMap: [Int : TypeProtocol], ast: APIExpression)) throws -> Module {
-        self.typeMap = input.typeMap
+    public func execute(input: CompilationContext) throws -> Module {
+        self.typeMap = input.expressionTypeMap
         
-        let typeDefs = input.ast.body.filter { $0 is TypeDefExpression }
-        let staticMethodDefs = input.ast.body.filter { $0 is MethodExpression }
+        guard let ast = input.mergedAPI else { throw OrbitError(message: "FATAL: APIs not merged") }
+        
+        self.module = Module(name: ast.name.value)
+        self.builder = IRBuilder(module: self.module)
+        
+        // BUILT-INS
+        _ = BuiltIn.generateIntIntPlusFn(builder: self.builder)
+        _ = self.builder.addFunction("printf", type: BuiltIn.Printf)
+        
+        let typeDefs = ast.body.filter { $0 is TypeDefExpression }
+        let staticMethodDefs = ast.body.filter { $0 is MethodExpression }
         
         try typeDefs.forEach { try self.generateTypeDef(expr: $0 as! TypeDefExpression) }
         try staticMethodDefs.forEach { try self.generateStaticMethod(expr: $0 as! MethodExpression) }
         
-        if input.context.hasMain {
+        if input.hasMain {
             try self.generateMain()
         }
         

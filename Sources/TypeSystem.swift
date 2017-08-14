@@ -320,8 +320,8 @@ public struct ReferenceType : TypeProtocol {
     type, the compiler checks that the given type exists.
  */
 public class TypeResolver : CompilationPhase {
-    public typealias InputType = APIExpression
-    public typealias OutputType = [Int : TypeProtocol]
+    public typealias InputType = CompilationContext
+    public typealias OutputType = CompilationContext
     
     private(set) var declaredTypes: [String : TypeProtocol] = [:]
     private(set) var declaredOperatorTypes: [String : TypeProtocol] = [:] // operator name against its return type
@@ -458,19 +458,21 @@ public class TypeResolver : CompilationPhase {
         
         expr.receiver.assignType(type: receiverType, env: self)
         
-        let name = Mangler.mangle(name: "\(receiverType.name).\(expr.methodName.value)")
+        var argTypes = try expr.args.map { try self.resolveValueType(expr: $0, enclosingScope: enclosingScope) }
+        
+        argTypes.insert(receiverType, at: 0)
+        
+        let name = Mangler.mangle(name: "\(receiverType.name).\(expr.methodName.value).\(argTypes.map { $0.name }.joined(separator: "."))")
         guard let methodType = try enclosingScope.enclosingScope?.lookupBinding(named: name, position: expr.startToken.position) as? MethodType else {
             throw OrbitError(message: "Call expressions are not permitted outside of method body", position: expr.startToken.position)
         }
         
         let signatureType = methodType.signatureType
         
-        var argTypes = try expr.args.map { try self.resolveValueType(expr: $0, enclosingScope: enclosingScope) }
-        
         // Insert implicit self as the first param
         argTypes.insert(receiverType, at: 0)
         
-        let expectedArgs = signatureType.argumentTypes
+        let expectedArgs = [receiverType] + signatureType.argumentTypes
 
         // TODO - There's probably a better way to say this!
         guard receiverType == signatureType.receiverType else {
@@ -806,16 +808,12 @@ public class TypeResolver : CompilationPhase {
         }
     }
     
-    public func execute(input: APIExpression) throws -> [Int : TypeProtocol] {
-//        var topLevelTypes: [TypeProtocol] = []
-//        for expr in input.body {
-//            let type = try self.resolveTopLevelType(expr: expr)
-//            
-//            topLevelTypes.append(type)
-//        }
+    public func execute(input: CompilationContext) throws -> CompilationContext {
+        guard let api = input.mergedAPI else { throw OrbitError(message: "FATAL: APIs not merged") }
+        _ = try self.resolveAPIType(expr: api)
         
-        _ = try self.resolveAPIType(expr: input)
+        input.expressionTypeMap = self.expressionTypeMap
         
-        return self.expressionTypeMap
+        return input
     }
 }

@@ -1,17 +1,23 @@
 api Main
     type Main(argc Int32, argv [[Int8]])
     trait A(x Int, y Int)
+    trait A2()
 
     type B(x Int, y Int) : A
+    type C(x Int, y Int) : A, A2
+    type D() : A2
 
-    (A) foo (a A) ()
-        debug a.x
+    (self A) print (a A2, x Int) ()
+        debug self.x
+        debug self.y
     ...
 
     (self Main) main () (Int32)
         b = B(1, 2)
-        A.foo(b)
+        c = C(1, 2)
 
+        b.print(c, 99)
+        
         return self.argc
     ...
 ...
