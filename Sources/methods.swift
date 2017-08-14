@@ -33,6 +33,8 @@ public class MethodResolver : CompilationPhase {
     public typealias InputType = CompilationContext
     public typealias OutputType = CompilationContext
     
+    public init() {}
+    
     func resolveType(expr: TypeDefExpression, methods: [MethodExpression]) -> TypeMethodMap {
         let owned = methods.filter { method in
             return method.signature.receiverType.value == expr.name.value
