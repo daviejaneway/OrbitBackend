@@ -114,7 +114,8 @@ public class CompilationContext {
         //let methods = self.apis.flatMap { $0.body.filter { $0 is MethodExpression } }
         
         // Order is important here
-        let body = traitDefs + typeDefs + generatedMethods + typeMethodMaps.flatMap { $0.methods as [Expression] } //methods
+        // TODO - Algorithm to calculate order of definition for methods
+        let body = traitDefs + typeDefs + generatedMethods + typeMethodMaps.flatMap { $0.methods as [Expression] }
         let api = APIExpression(name: "API", body: body, startToken: self.apis[0].startToken)
         
         self.mergedAPI = api

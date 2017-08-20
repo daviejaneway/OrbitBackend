@@ -1,25 +1,23 @@
 api Main
-    type Main(argc Int32, argv [[Int8]])
+    trait Shape(numberOfSides Int)
 
-    trait TraitA(x Int)
-    trait TraitB()
+    type Point(x Int, y Int) : Shape
 
-    type TypeA(x Int) : TraitA
-    type TypeB() : TraitB
-    type TypeC(x Int) : TraitA
-
-    (self TraitA) foo () (Int)
-        debug self.x
-        return self.x
+    (Point) add (p1 Point, p2 Point) (Point)
+        return Point(p1.x + p2.x, p1.y + p2.y)
     ...
 
-    (self Main) main () (Int32)
-        a = TypeA(1)
-        b = TypeB()
-        c = TypeC(3)
+    type Main(argc Int32, argv [[Int8]])
 
-        a.foo()
-        c.foo()
+    (self Main) main () (Int32)
+        p1 = Point(2, 2)
+        p2 = Point(3, 3)
+
+        p3 = Point.add(p1, p2)
+
+        debug p1
+        debug p2
+        debug p3
 
         return self.argc
     ...

@@ -173,8 +173,6 @@ public class TraitResolver : CompilationPhase {
             }
         }
         
-        print((input.generatedMethods as! [MethodExpression]).map { $0.signature.name.value })
-        
         _ = try input.mergeAPIs()
         
         return input

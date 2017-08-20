@@ -49,8 +49,11 @@ class OrbitBackendTests : XCTestCase {
         let result = try gen.execute(input: context)
         
         result.dump()
+        try result.print(to: "/Users/davie/dev/other/test.ll")
         
         try result.verify()
+        
+        try TargetMachine().emitToFile(module: result, type: .assembly, path: "/Users/davie/dev/other/test.s")
     }
     
     func testResolve() {

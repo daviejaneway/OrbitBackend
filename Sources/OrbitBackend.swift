@@ -19,8 +19,8 @@ public struct IRBinding {
     let type: TypeProtocol
     let irType: IRType
     
-    static func create(builder: IRBuilder, type: TypeProtocol, irType: IRType, name: String, initial: IRValue, isFunctionParameter: Bool = false) -> IRBinding {
-        if isFunctionParameter {
+    static func create(builder: IRBuilder, type: TypeProtocol, irType: IRType, name: String, initial: IRValue, bypassAlloca: Bool = false) -> IRBinding {
+        if bypassAlloca {
             let write = { builder.buildStore($0, to: initial) }
             
             return IRBinding(ref: initial, read: { initial }, write: write, type: type, irType: irType)
@@ -30,8 +30,8 @@ public struct IRBinding {
         
         builder.buildStore(initial, to: alloca)
         
-        let read = { return isFunctionParameter ? initial : builder.buildLoad(alloca) }
-        let write = { builder.buildStore($0, to: isFunctionParameter ? initial : alloca) }
+        let read = { return builder.buildLoad(alloca) }
+        let write = { builder.buildStore($0, to: alloca) }
         
         return IRBinding(ref: alloca, read: read, write: write, type: type, irType: irType)
     }
@@ -99,6 +99,8 @@ public class LLVMGenerator : CompilationPhase {
     
     private var builder: IRBuilder!
     private(set) var module: Module!
+    
+    private var stringPool = [String : IRValue]()
     
     private var typeMap: [Int : TypeProtocol] = [:]
     private var llvmTypeMap: [Name : IRType] = [
@@ -196,14 +198,13 @@ public class LLVMGenerator : CompilationPhase {
                 return
             }
             
-            let alloca = self.builder.buildAlloca(type: irType)
+            let alloca = self.builder.buildMalloc(irType)
             
             fn.parameters.enumerated().forEach { pair in
                 let gep = self.builder.buildStructGEP(alloca, index: pair.offset)
                 
                 self.builder.buildStore(pair.element, to: gep)
             }
-            
             
             _ = self.builder.buildRet(alloca)
         }
@@ -259,18 +260,16 @@ public class LLVMGenerator : CompilationPhase {
         
         let val = try self.generateValue(expr: expr.receiver, dereferencePointer: true, scope: enclosingScope)
         
-        // TODO - Always dereference the GEP?
-        
         let alloca = self.builder.buildStructGEP(val, index: idx)
         
-        return self.builder.buildLoad(alloca)
+        let l = self.builder.buildLoad(alloca)
+        
+        return l
     }
     
     func generateList(expr: ListExpression, scope: Scope) throws -> IRValue {
         let listType = try self.lookupType(expr: expr) as! ListType
-        //let arrType = try self.lookupLLVMType(type: listType)
         let elementType = try self.lookupLLVMType(type: listType.elementType, position: expr.startToken.position)
-        //let elementPtrType = PointerType(pointee: elementType)
         let values = try expr.value.map { try self.generateValue(expr: $0, dereferencePointer: true, scope: scope) }
         
         let malloc = self.builder.buildMalloc(elementType, count: listType.size, name: "")
@@ -310,9 +309,9 @@ public class LLVMGenerator : CompilationPhase {
         return str
     }
     
-    func generateValue(expr: Expression, dereferencePointer: Bool = true, scope: Scope) throws -> IRValue {
+    func generateValue(expr: Expression, dereferencePointer: Bool = true, llvmName: String? = nil, scope: Scope) throws -> IRValue {
         switch expr {
-        case is IdentifierExpression: return try self.generateVariableRef(expr: expr as! IdentifierExpression, dereference: dereferencePointer, enclosingScope: scope)
+            case is IdentifierExpression: return try self.generateVariableRef(expr: expr as! IdentifierExpression, dereference: dereferencePointer, enclosingScope: scope)
             case is IntLiteralExpression: return try self.generateIntValue(expr: expr as! IntLiteralExpression)
             case is RealLiteralExpression: return try self.generateRealValue(expr: expr as! RealLiteralExpression)
             case is StringLiteralExpression: return try self.generateStringValue(expr: expr as! StringLiteralExpression)
@@ -322,7 +321,7 @@ public class LLVMGenerator : CompilationPhase {
             case is AssignmentStatement: return try self.generateAssignment(expr: expr as! AssignmentStatement, scope: scope)
             case is ListExpression: return try self.generateList(expr: expr as! ListExpression, scope: scope)
             case is IndexAccessExpression: return try self.generateIndexAccess(expr: expr as! IndexAccessExpression, scope: scope)
-            case is StaticCallExpression: return try self.generateStaticCall(expr: expr as! StaticCallExpression, scope: scope)
+            case is StaticCallExpression: return try self.generateStaticCall(expr: expr as! StaticCallExpression, llvmName: llvmName ?? "", scope: scope)
             case is InstanceCallExpression: return try self.generateInstanceCall(expr: expr as! InstanceCallExpression, scope: scope)
             
             default: throw OrbitError(message: "Expression \((expr as! GroupableExpression).dump()) does not yield a value", position: expr.startToken.position)
@@ -341,22 +340,24 @@ public class LLVMGenerator : CompilationPhase {
         let valueType = try self.lookupType(expr: expr.value)
         
         let irType = try self.lookupLLVMType(type: valueType, position: expr.startToken.position)
-        let value = try self.generateValue(expr: expr.value, scope: scope)
-        let binding = IRBinding.create(builder: self.builder, type: valueType, irType: irType, name: expr.name.value, initial: value)
+        let value = try self.generateValue(expr: expr.value, llvmName: expr.name.value, scope: scope)
+        let binding = IRBinding.create(builder: self.builder, type: valueType, irType: irType, name: expr.name.value, initial: value, bypassAlloca: true)
         
         try scope.defineVariable(named: expr.name.value, binding: binding, position: expr.startToken.position)
         
         return value
     }
     
-    func generateStaticCall(expr: StaticCallExpression, scope: Scope) throws -> IRValue {
+    func generateStaticCall(expr: StaticCallExpression, llvmName: String, scope: Scope) throws -> IRValue {
         let argTypes = try expr.args.map { try self.lookupType(expr: $0).name }.joined(separator: ".")
         
         let name = Mangler.mangle(name: "\(expr.receiver.value).\(expr.methodName.value).\(argTypes)")
         let fn = try self.lookupFunction(named: name, position: expr.startToken.position)
         let args = try expr.args.map { try self.generateValue(expr: $0, scope: scope) }
         
-        return self.builder.buildCall(fn, args: args)
+        guard llvmName != "" else { return self.builder.buildCall(fn, args: args) }
+        
+        return self.builder.buildCall(fn, args: args, name: llvmName)
     }
     
     func generateInstanceCall(expr: InstanceCallExpression, scope: Scope) throws -> IRValue {
@@ -419,34 +420,80 @@ public class LLVMGenerator : CompilationPhase {
         return value
     }
     
-    private func fmtString(value: IRValue, type: TypeProtocol, position: SourcePosition) throws -> String {
+    private func fmtString(value: IRValue, type: TypeProtocol, newline: Bool = true, position: SourcePosition) throws -> (String, [IRValue]) {
         let kind = LLVMGetTypeKind(value.type.asLLVM())
         var fmt = ""
         
+        let nl = "" //newline ? "\n" : ""
+        
         if kind == LLVMIntegerTypeKind {
-            fmt = "%d\n"
+            fmt = "%lld\(nl)"
         } else if kind == LLVMFloatTypeKind {
-            fmt = "%f\n"
+            fmt = "%f\(nl)"
+        } else if kind == LLVMDoubleTypeKind {
+            fmt = "%f\(nl)"
         } else if kind == LLVMPointerTypeKind {
             let deref = derefPointer(value: value)
             
             let pointeeKind = LLVMGetTypeKind(deref.type.asLLVM())
             
-            if type == ReferenceType.StringType {
-                return "%s\n"
+            if pointeeKind == LLVMIntegerTypeKind {
+                // Assume any int* is a string
+                return ("%s\(nl)", [value])
             }
             
             if pointeeKind == LLVMStructTypeKind {
                 // TODO - StringValue trait
-                throw OrbitError(message: "Struct debugging is not currently supported", position: position)
+                
+                if let strct = type as? TypeDefType {
+                    let fmts: [(String, IRValue)] = try strct.propertyTypes.enumerated().map { tup in
+                        let gep = self.builder.buildStructGEP(value, index: tup.offset)
+                        let val = self.builder.buildLoad(gep)
+                        
+                        let fmt = try fmtString(value: val, type: tup.element.value, newline: false, position: position)
+                        
+                        return ("\(tup.element.key):\(fmt.0)", fmt.1[0])
+                    }
+                    
+                    let fmtStr = fmts.map { $0.0 }.joined(separator: ", ")
+                    
+                    return ("\(type.name)(\(fmtStr))", fmts.map { $0.1 })
+                } else if let prop = type as? PropertyAccessType {
+                    return try fmtString(value: value, type: prop.propertyType, newline: newline, position: position)
+                }
+                
+                throw OrbitError(message: "Cannot debug value of type: \(type.name)", position: position)
             } else {
-                return try fmtString(value: deref, type: type, position: position)
+                return try fmtString(value: deref, type: type, newline: newline, position: position)
             }
         } else {
             throw OrbitError(message: "Cannot debug value of type '\(type.name)'", position: position)
         }
         
-        return fmt
+        return (fmt, [value])
+    }
+    
+    func generatePrintf(fmtString: String, value: IRValue) {
+        guard let printf = self.module.function(named: "printf") else {
+            return
+        }
+        
+        let fmtStr = self.builder.buildGlobalStringPtr(fmtString)
+        
+        _ = self.builder.buildCall(printf, args: [fmtStr, value])
+    }
+    
+    // If we've already allocated a global string with this value, we can safely reuse it
+    func globalStringPtr(str: String) -> IRValue {
+        guard let ptr = self.stringPool[str] else {
+            let ptr = self.builder.buildGlobalStringPtr(str)
+            
+            self.stringPool[str] = ptr
+            
+            return ptr
+        }
+        
+        return ptr
     }
     
     func generateDebug(expr: DebugExpression, scope: Scope) throws -> IRValue? {
@@ -459,9 +506,12 @@ public class LLVMGenerator : CompilationPhase {
         
         let fmt = try fmtString(value: value, type: valueType, position: expr.startToken.position)
         
-        let fmtStr = self.builder.buildGlobalStringPtr(fmt)
+        let fmtStr = self.globalStringPtr(str: "\(fmt.0)\n")
         
-        _ = self.builder.buildCall(printf, args: [fmtStr, value])
+        var arr = [fmtStr]
+        arr.append(contentsOf: fmt.1)
+        
+        _ = self.builder.buildCall(printf, args: arr)
         
         return nil
     }
@@ -471,7 +521,7 @@ public class LLVMGenerator : CompilationPhase {
             case is ValueExpression: return try self.generateValue(expr: expr, scope: scope)
             case is ReturnStatement: return try self.generateReturn(expr: expr as! ReturnStatement, scope: scope)
             case is AssignmentStatement: return try self.generateAssignment(expr: expr as! AssignmentStatement, scope: scope)
-            case is StaticCallExpression: return try self.generateStaticCall(expr: expr as! StaticCallExpression, scope: scope)
+            case is StaticCallExpression: return try self.generateStaticCall(expr: expr as! StaticCallExpression, llvmName: "", scope: scope)
             case is InstanceCallExpression: return try self.generateInstanceCall(expr: expr as! InstanceCallExpression, scope: scope)
             case is DebugExpression: return try self.generateDebug(expr: expr as! DebugExpression, scope: scope)
             
@@ -512,7 +562,7 @@ public class LLVMGenerator : CompilationPhase {
             let type = try self.lookupType(expr: element.type)
             let irType = try self.lookupLLVMType(hashValue: element.type.hashValue, position: element.startToken.position)
             
-            let binding = IRBinding.create(builder: self.builder, type: type, irType: irType, name: element.name.value, initial: function.parameters[offset], isFunctionParameter: true)
+            let binding = IRBinding.create(builder: self.builder, type: type, irType: irType, name: element.name.value, initial: function.parameters[offset], bypassAlloca: false)
             
             try signatureType.scope.defineVariable(named: element.name.value, binding: binding, position: element.startToken.position)
         }

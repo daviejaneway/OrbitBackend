@@ -609,6 +609,8 @@ public class TypeResolver : CompilationPhase {
             throw OrbitError(message: "Operator '\(fullName)' does not exist", position: expr.startToken.position)
         }
         
+        expr.assignType(type: retType, env: self)
+        
         return retType
     }
     
@@ -668,6 +670,8 @@ public class TypeResolver : CompilationPhase {
                 let type = try enclosingScope.lookupBinding(named: (expr as! IdentifierExpression).value, position: expr.startToken.position)
                 expr.assignType(type: type, env: self)
                 return type
+            
+            case is BinaryExpression: return try resolveBinaryExpression(expr: expr as! BinaryExpression, enclosingScope: enclosingScope)
             
             case is InstanceCallExpression: return try resolveInstanceCallType(expr: expr as! InstanceCallExpression, enclosingScope: enclosingScope)
             case is StaticCallExpression: return try resolveStaticCallType(expr: expr as! StaticCallExpression, enclosingScope: enclosingScope)
