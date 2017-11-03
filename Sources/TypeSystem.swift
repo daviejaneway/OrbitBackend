@@ -637,6 +637,7 @@ public class TypeResolver : CompilationPhase {
     }
     
     func resolveIndexAccessType(expr: IndexAccessExpression, enclosingScope: Scope) throws -> TypeProtocol {
+        // TODO - Fix index access on property access
         guard let rType = try resolveValueType(expr: expr.receiver, enclosingScope: enclosingScope) as? CollectionType else {
             throw OrbitError(message: "Attempting to index non-collection type", position: expr.startToken.position)
         }

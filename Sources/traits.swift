@@ -81,7 +81,6 @@ public class TraitResolver : CompilationPhase {
                 3) The return type could also be a trait type
         */
         
-        
         let specialisations = try specialise(allParameters: method.signature.parameters)
         
         // Its easier to generate all the powersets and pick out the ones we need
@@ -139,18 +138,6 @@ public class TraitResolver : CompilationPhase {
             // Static dispatch might not be enough. We might have to use dynamic dispatch.
             
             throw OrbitError(message: "Method '\(unmangledNames[0].absoluteName)' returns trait type '\(ret.value)' which causes an ambiguity in the current version of Orbit that is not supported", position: ret.startToken.position)
-            
-//            let concretions = self.context.typeMethodMaps.filter { $0.type.adoptedTraits.map { $0.value }.contains(ret.value) }
-//            
-//            guard concretions.count > 0 else {
-//                throw OrbitError(message: "Trait '\(ret.value)' has no concrete implementations, but is returned from method '\(unmangledNames[0].absoluteName)'", position: ret.startToken.position)
-//            }
-            
-//            return (valid3 as! [MethodExpression]).flatMap { method in
-//                return concretions.flatMap { conc in
-//                    
-//                }
-//            }
         }
         
         return valid3

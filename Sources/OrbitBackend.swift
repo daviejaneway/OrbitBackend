@@ -518,14 +518,17 @@ public class LLVMGenerator : CompilationPhase {
     
     func generate(expr: Expression, scope: Scope) throws -> IRValue? {
         switch expr {
-            case is ValueExpression: return try self.generateValue(expr: expr, scope: scope)
             case is ReturnStatement: return try self.generateReturn(expr: expr as! ReturnStatement, scope: scope)
             case is AssignmentStatement: return try self.generateAssignment(expr: expr as! AssignmentStatement, scope: scope)
             case is StaticCallExpression: return try self.generateStaticCall(expr: expr as! StaticCallExpression, llvmName: "", scope: scope)
             case is InstanceCallExpression: return try self.generateInstanceCall(expr: expr as! InstanceCallExpression, scope: scope)
             case is DebugExpression: return try self.generateDebug(expr: expr as! DebugExpression, scope: scope)
             
-            default: throw OrbitError(message: "Could not evaluate expression: \(expr)", position: expr.startToken.position)
+            // Swift's generics aren't fit for purpose
+            default: return try self.generateValue(expr: expr, scope: scope)
+            //case is ValueExpression: return try self.generateValue(expr: expr, scope: scope)
+            
+            //default: throw OrbitError(message: "Could not evaluate expression: \(expr)", position: expr.startToken.position)
         }
     }
     

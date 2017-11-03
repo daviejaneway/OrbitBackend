@@ -1,24 +1,21 @@
-api Main
-    trait Shape(numberOfSides Int)
-
-    type Point(x Int, y Int) : Shape
-
-    (Point) add (p1 Point, p2 Point) (Point)
-        return Point(p1.x + p2.x, p1.y + p2.y)
-    ...
+api Main {
+    trait Debuggable() {
+        (self Self) stringValue () (String)
+    }
 
     type Main(argc Int32, argv [[Int8]])
 
-    (self Main) main () (Int32)
-        p1 = Point(2, 2)
-        p2 = Point(3, 3)
+    type Foo(x Int) : Debuggable
 
-        p3 = Point.add(p1, p2)
+    (self Foo) stringValue () (String) {
+        return "FOO"
+    }
 
-        debug p1
-        debug p2
-        debug p3
+    (self Main) main () (Int32) {
+        f = Foo(123)
+
+        debug f.stringValue()
 
         return self.argc
-    ...
-...
+    }
+}

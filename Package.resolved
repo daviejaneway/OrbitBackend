@@ -1,0 +1,61 @@
+{
+  "object": {
+    "pins": [
+      {
+        "package": "FileCheck",
+        "repositoryURL": "https://github.com/trill-lang/FileCheck.git",
+        "state": {
+          "branch": null,
+          "revision": "482e22960391b02e3630ae3af4dce64d16dd63e7",
+          "version": "0.0.3"
+        }
+      },
+      {
+        "package": "LLVM",
+        "repositoryURL": "https://github.com/trill-lang/LLVMSwift",
+        "state": {
+          "branch": null,
+          "revision": "1e1f638d919e7e99661a05fc705ceec10635f8c8",
+          "version": "0.2.1"
+        }
+      },
+      {
+        "package": "OrbitCompilerUtils",
+        "repositoryURL": "https://github.com/daviejaneway/OrbitCompilerUtils.git",
+        "state": {
+          "branch": null,
+          "revision": "72431a7afd1f88d2f35fc428ad0e2fc9358418aa",
+          "version": "0.0.3"
+        }
+      },
+      {
+        "package": "OrbitFrontend",
+        "repositoryURL": "https://github.com/daviejaneway/OrbitFrontend.git",
+        "state": {
+          "branch": null,
+          "revision": "0555c5d8796ed64eeb225023033ff301a5d76418",
+          "version": "0.0.53"
+        }
+      },
+      {
+        "package": "SwiftyJSON",
+        "repositoryURL": "https://github.com/SwiftyJSON/SwiftyJSON.git",
+        "state": {
+          "branch": null,
+          "revision": "dadbfcffd5f51e2b488a26e83f188d96755e5393",
+          "version": "3.1.4"
+        }
+      },
+      {
+        "package": "cllvm",
+        "repositoryURL": "https://github.com/trill-lang/cllvm.git",
+        "state": {
+          "branch": null,
+          "revision": "e85a8ebe9f45cff9fa31b43c32662318232b392a",
+          "version": "0.0.3"
+        }
+      }
+    ]
+  },
+  "version": 1
+}
