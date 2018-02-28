@@ -36,6 +36,8 @@ public class TypeExtractor : CompilationPhase {
     
     private var types = [TypeRecord]()
     
+    public init() {}
+    
     func extractTypes(fromApi api: APIExpression) throws {
         let typeDefs = api.body.filter { $0 is TypeDefExpression } as! [TypeDefExpression]
         
@@ -64,6 +66,8 @@ public class TypeExtractor : CompilationPhase {
 public class TypeResolver : CompilationPhase {
     public typealias InputType = (RootExpression, [TypeRecord])
     public typealias OutputType = RootExpression
+    
+    public init() {}
     
     func findType(named: String, types: [TypeRecord]) throws -> TypeRecord {
         let types = types.filter { $0.shortName == named }

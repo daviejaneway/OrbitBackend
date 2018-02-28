@@ -37,7 +37,10 @@ class OrbitBackendTests : XCTestCase {
         let typeExtractor = TypeExtractor()
         let types = try typeExtractor.execute(input: ast as! RootExpression)
         
-        print(types)
+        let typeResolver = TypeResolver()
+        let result = try typeResolver.execute(input: (ast as! RootExpression, types))
+        
+        print(result)
         
 //        let typer = SimpleTyper()
 //        let typeMap = try typer.execute(input: ast as! RootExpression) as! ProgramType
