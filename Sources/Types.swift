@@ -197,6 +197,19 @@ struct Block : Type {
     }
 }
 
+struct Signature : Type {
+    let name: String
+    let receiverType: Type
+    let argTypes: [String : Type]
+    let returnType: Type
+    
+    func debug(level: Int) -> String {
+        let tabs = debugIndentation(level: level + 1)
+        let args = self.argTypes.map { $0.value }.map { $0.debug(level: 0) }.joined(separator: ",")
+        return "\(debugIndentation(level: level))SIGNATURE:\n\(tabs)RECEIVER: \(self.receiverType.debug(level: 0))\n\(tabs)ARGS: (\(args))\n\(tabs)RETURN: \(self.returnType.debug(level: 0))"
+    }
+}
+
 struct Method : Type {
     let name: String
     let receiverType: Type
@@ -268,6 +281,10 @@ class Environment {
     }
 }
 
+struct TypeAnnotation : ExpressionAnnotation {
+    let type: Type
+}
+
 protocol ExpressionTyperProtocol {}
 
 protocol ExpressionTyper : ExpressionTyperProtocol {
@@ -281,7 +298,12 @@ class RootExpressionType : ExpressionTyper {
 
     func generateType(forExpression expression: RootExpression, environment: Environment) throws -> Type {
         let apiTyper = APIExpressionTyper()
-        let apiTypes = try (expression.body as! [APIExpression]).map { try apiTyper.generateType(forExpression: $0, environment: environment) }
+        
+        let prog = expression.body[0] as! ProgramExpression
+        
+        let apiTypes = try (prog.apis).map {
+            try apiTyper.generateType(forExpression: $0, environment: environment)
+        }
 
         return ProgramType(apis: apiTypes as! [API])
     }

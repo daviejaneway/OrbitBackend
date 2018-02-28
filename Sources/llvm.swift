@@ -49,7 +49,7 @@ class LLVMGen : CompilationPhase {
         let context = CompContext(name: api.name)
         
         api.declaredTypes.forEach {
-            context.find(type: $0)
+            _ = context.find(type: $0)
         }
         
         return context

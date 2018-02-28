@@ -22,14 +22,10 @@ class OrbitBackendTests : XCTestCase {
 //        return ast
 //    }
     
-    func buildTestFile(testFileName: String) throws { //-> (TypeResolver.OutputType, Parser.OutputType) {
+    func buildTestFile(testFileName: String) throws {
         let source = SourceResolver()
         let lexer = Lexer()
-        //let parser = Parser()
         let parser = ParseContext.bootstrapParser()
-//        let nr = NameResolver()
-//        let mr = MethodResolver()
-//        let traitResolver = TraitResolver()
         
         let bundle = Bundle(for: type(of: self))
         let path = bundle.path(forResource: testFileName, ofType: "orb")!
@@ -38,21 +34,26 @@ class OrbitBackendTests : XCTestCase {
         let tokens = try lexer.execute(input: code)
         let ast = try parser.execute(input: tokens)
         
-        let typer = SimpleTyper()
-        let typeMap = try typer.execute(input: ast as! RootExpression) as! ProgramType
+        let typeExtractor = TypeExtractor()
+        let types = try typeExtractor.execute(input: ast as! RootExpression)
         
-        let expander = TypeExpander()
-        let expandedTypeMap = try expander.execute(input: typeMap)
+        print(types)
         
-        print(expandedTypeMap.debug(level: 0))
-        
-        let unique = Uniqueness()
-        let prog = try unique.execute(input: expandedTypeMap)
-        
-        let llvm = LLVMGen()
-        let context = try llvm.execute(input: prog)
-        
-        context.gen()
+//        let typer = SimpleTyper()
+//        let typeMap = try typer.execute(input: ast as! RootExpression) as! ProgramType
+//
+//        let expander = TypeExpander()
+//        let expandedTypeMap = try expander.execute(input: typeMap)
+//
+//        print(expandedTypeMap.debug(level: 0))
+//
+//        let unique = Uniqueness()
+//        let prog = try unique.execute(input: expandedTypeMap)
+//
+//        let llvm = LLVMGen()
+//        let context = try llvm.execute(input: prog)
+//
+//        context.gen()
         
 //        var context = try nr.execute(input: ast.body as! [APIExpression])
 //        context = try mr.execute(input: context)

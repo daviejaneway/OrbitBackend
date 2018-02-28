@@ -43,8 +43,11 @@ class TypeDefExpressionTyper : ExpressionTyper {
         }
         
         let unit = Unit(name: expression.name.value, properties: propertyTypes, adoptedTraits: adoptedTraits)
+        let type = environment.qualify(unit: unit)
         
-        return environment.qualify(unit: unit)
+        expression.annotate(annotation: TypeAnnotation(type: type))
+        
+        return type
     }
 }
 
@@ -63,7 +66,10 @@ class TraitDefExpressionTyper : ExpressionTyper {
         }
         
         let trait = Trait(name: expression.name.value, attributes: attributes)
+        let type = environment.qualify(unit: trait)
         
-        return environment.qualify(unit: trait)
+        
+        
+        return type
     }
 }

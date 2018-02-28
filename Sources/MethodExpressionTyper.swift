@@ -128,6 +128,38 @@ class BlockTyper {
     }
 }
 
+class PairExpressionTyper : ExpressionTyper {
+    typealias ExpressionType = PairExpression
+    
+    func generateType(forExpression expression: PairExpression, environment: Environment) throws -> Type {
+        let type = environment.qualify(unit: try TypeIdentifierTyper().generateType(forExpression: expression.type, environment: environment))
+        
+        expression.annotate(annotation: TypeAnnotation(type: type))
+        
+        return type
+    }
+}
+
+class SignatureExpressionTyper : ExpressionTyper {
+    typealias ExpressionType = StaticSignatureExpression
+    
+    func generateType(forExpression expression: StaticSignatureExpression, environment: Environment) throws -> Type {
+        let rec = PlaceHolder(name: expression.receiverType.value)
+        let ret: Type = (expression.returnType == nil) ? None() : PlaceHolder(name: expression.returnType!.value)
+        var argsDict = [String : Type]()
+        
+        expression.parameters.forEach {
+            let type = PlaceHolder(name: $0.type.value)
+            
+            argsDict[$0.name.value] = type
+        }
+        
+        let type = Signature(name: expression.name.value, receiverType: rec, argTypes: argsDict, returnType: ret)
+        
+        return type
+    }
+}
+
 class MethodExpressionTyper : ExpressionTyper {
     typealias ExpressionType = MethodExpression
     
@@ -146,6 +178,7 @@ class MethodExpressionTyper : ExpressionTyper {
             
             methodScope.bind(name: $0.name.value, toType: type)
         }
+        
 //
 //        let body = try BlockTyper.generateType(forStatements: expression.body, environment: methodScope)
         

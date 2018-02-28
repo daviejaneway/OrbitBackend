@@ -37,6 +37,10 @@ class APIExpressionTyper : ExpressionTyper {
             try methodTyper.generateType(forExpression: $0, environment: this)
         }
         
-        return API(name: this.qualifiedName, declaredTypes: typeDefs + methods + traitDefs)
+        let type = API(name: this.qualifiedName, declaredTypes: typeDefs + methods + traitDefs)
+        
+        expression.annotate(annotation: TypeAnnotation(type: type))
+        
+        return type
     }
 }
