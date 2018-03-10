@@ -4,6 +4,6 @@ api Main {
     }
 
     (Int) add2 (a Int, b Int) (Int) {
-        return Int.add(a, b)
+        return Int.add(a, b) + Int.add(Int.add(a, b), b)
     }
 }
