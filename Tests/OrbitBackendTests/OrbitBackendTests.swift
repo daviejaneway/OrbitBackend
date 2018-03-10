@@ -40,7 +40,7 @@ class OrbitBackendTests : XCTestCase {
         let typeResolver = TypeResolver()
         let result = try typeResolver.execute(input: (ast as! RootExpression, types))
         
-        print(result)
+        print(result.toJson())
         
 //        let typer = SimpleTyper()
 //        let typeMap = try typer.execute(input: ast as! RootExpression) as! ProgramType

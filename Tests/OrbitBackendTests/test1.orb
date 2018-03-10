@@ -1,7 +1,9 @@
 api Main {
-    type Int()
-
     (Int) add (a Int, b Int) (Int) {
-        return 1
+        return Int.add(Int.add(1, 2), Int.add(a, b))
+    }
+
+    (Int) add2 (a Int, b Int) (Int) {
+        return Int.add(a, b)
     }
 }
