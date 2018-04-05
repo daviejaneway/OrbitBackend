@@ -1,9 +1,3 @@
-api Main {
-    (Int) add (a Int, b Int) (Int) {
-        return Int.add(Int.add(1, 2), Int.add(a, b))
-    }
-
-    (Int) add2 (a Int, b Int) (Int) {
-        return Int.add(a, b) + Int.add(Int.add(a, b), b)
-    }
+api Main within Orb::Core {
+    type Test()
 }

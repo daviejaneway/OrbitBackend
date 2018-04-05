@@ -15,8 +15,8 @@
         "repositoryURL": "https://github.com/trill-lang/LLVMSwift",
         "state": {
           "branch": null,
-          "revision": "adc94d2a3e24913c88980ba00e81502f47f7bd33",
-          "version": "0.2.2"
+          "revision": "a9581c749206334cdd76efc431c4d5081cbad2f7",
+          "version": "0.2.3"
         }
       },
       {
@@ -24,8 +24,8 @@
         "repositoryURL": "https://github.com/daviejaneway/OrbitCompilerUtils.git",
         "state": {
           "branch": null,
-          "revision": "72431a7afd1f88d2f35fc428ad0e2fc9358418aa",
-          "version": "0.0.3"
+          "revision": "f5c190ca93baf121068ee7a02494ccc4caf0f97f",
+          "version": "0.0.8"
         }
       },
       {
@@ -33,8 +33,8 @@
         "repositoryURL": "https://github.com/daviejaneway/OrbitFrontend.git",
         "state": {
           "branch": null,
-          "revision": "e375aa82f884e041d7c84e1fe167bcb003f1c21b",
-          "version": "0.0.66"
+          "revision": "789cf42006e8f52ee3ed684cb297a03a18929421",
+          "version": "0.0.70"
         }
       },
       {
@@ -51,8 +51,8 @@
         "repositoryURL": "https://github.com/llvm-swift/cllvm.git",
         "state": {
           "branch": null,
-          "revision": "e85a8ebe9f45cff9fa31b43c32662318232b392a",
-          "version": "0.0.3"
+          "revision": "f85b813d7c2952ffc4cb0c46f905986d12935362",
+          "version": "0.0.6"
         }
       }
     ]

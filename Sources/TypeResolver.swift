@@ -98,9 +98,13 @@ public class TypeExtractor : CompilationPhase {
     public typealias InputType = RootExpression
     public typealias OutputType = [TypeRecord]
     
+    public let session: OrbitSession
+    
     private var types = [TypeRecord]()
     
-    public init() {}
+    public required init(session: OrbitSession) {
+        self.session = session
+    }
     
     func extractTypes(fromApi api: APIExpression) throws {
         let typeDefs = api.body.filter { $0 is TypeDefExpression } as! [TypeDefExpression]
@@ -179,7 +183,11 @@ public class TypeResolver : CompilationPhase {
     public typealias InputType = (RootExpression, [TypeRecord])
     public typealias OutputType = RootExpression
     
-    public init() {}
+    public let session: OrbitSession
+    
+    public required init(session: OrbitSession) {
+        self.session = session
+    }
     
     func resolve(typeId: TypeIdentifierExpression, scope: Scope) throws -> AbstractTypeRecord {
         var type: AbstractTypeRecord = try scope.findType(named: typeId.value)
@@ -243,9 +251,6 @@ public class TypeResolver : CompilationPhase {
     func resolve(binary: BinaryExpression, scope: Scope) throws -> AbstractTypeRecord {
         let leftType = try resolve(value: binary.left as! RValueExpression, scope: scope)
         let rightType = try resolve(value: binary.right as! RValueExpression, scope: scope)
-        
-        binary.left.annotate(annotation: TypeRecordAnnotation(typeRecord: leftType))
-        binary.right.annotate(annotation: TypeRecordAnnotation(typeRecord: rightType))
         
         let opFuncName = "\(TypeRecord.op.fullName).\(binary.op.symbol).\(leftType.fullName).\(rightType.fullName)"
         let error = OrbitError(message: "Infix Operator function '\(binary.op.symbol)' is not defined with parameter types (\(leftType.fullName), \(rightType.fullName))")

@@ -313,6 +313,12 @@ class SimpleTyper : CompilationPhase {
     typealias InputType = RootExpression
     typealias OutputType = Type
 
+    let session: OrbitSession
+    
+    required init(session: OrbitSession) {
+        self.session = session
+    }
+    
     func execute(input: RootExpression) throws -> Type {
         return try RootExpressionType().generateType(forExpression: input, environment: Environment(parent: nil, name: ""))
     }
@@ -519,6 +525,12 @@ class APIExpander : TypeExpanderProtocol {
 class TypeExpander : CompilationPhase {
     typealias InputType = ProgramType
     typealias OutputType = ProgramType
+    
+    let session: OrbitSession
+    
+    required init(session: OrbitSession) {
+        self.session = session
+    }
     
     func execute(input: ProgramType) throws -> ProgramType {
         let apiExpander = APIExpander()

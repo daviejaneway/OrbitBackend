@@ -23,9 +23,11 @@ class OrbitBackendTests : XCTestCase {
 //    }
     
     func buildTestFile(testFileName: String) throws {
-        let source = SourceResolver()
-        let lexer = Lexer()
-        let parser = ParseContext.bootstrapParser()
+        let session = OrbitSession()
+        
+        let source = SourceResolver(session: session)
+        let lexer = Lexer(session: session)
+        let parser = ParseContext.bootstrapParser(session: session)
         
         let bundle = Bundle(for: type(of: self))
         let path = bundle.path(forResource: testFileName, ofType: "orb")!
@@ -34,13 +36,24 @@ class OrbitBackendTests : XCTestCase {
         let tokens = try lexer.execute(input: code)
         let ast = try parser.execute(input: tokens)
         
-        let typeExtractor = TypeExtractor()
+        let typeExtractor = TypeExtractor(session: session)
         let types = try typeExtractor.execute(input: ast as! RootExpression)
         
-        let typeResolver = TypeResolver()
+        let typeResolver = TypeResolver(session: session)
         let result = try typeResolver.execute(input: (ast as! RootExpression, types))
         
-        print(result.toJson())
+        let typeChecker = TypeChecker(session: session)
+        let verified = try typeChecker.execute(input: (ast as! RootExpression, types))
+        
+        print(verified.toJson())
+        typeChecker.session.popAll()
+        
+        let llvm = LLVMGen(session: session)
+        let gen = try llvm.execute(input: (ast as! RootExpression))
+        
+        gen.forEach {
+            $0.context.gen()
+        }
         
 //        let typer = SimpleTyper()
 //        let typeMap = try typer.execute(input: ast as! RootExpression) as! ProgramType

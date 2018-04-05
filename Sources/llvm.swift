@@ -7,6 +7,7 @@
 
 import Foundation
 import OrbitCompilerUtils
+import OrbitFrontend
 import LLVM
 
 struct CompContext {
@@ -20,9 +21,9 @@ struct CompContext {
         self.builder = IRBuilder(module: self.module)
     }
     
-    func find(type: Type) -> IRType {
-        guard let t = self.types[type.name] else {
-            return TypeGen.generate(context: self, type: type)
+    func find(type: TypeRecord) throws -> IRType {
+        guard let t = self.types[type.fullName] else {
+            throw OrbitError(message: "Type '\(type.fullName)' not defined")
         }
         
         return t
@@ -33,25 +34,71 @@ struct CompContext {
     }
 }
 
-class TypeGen {
+protocol LLVMGenerator {
+    associatedtype ExpressionType: AbstractExpression
+    associatedtype LLVMType
     
-    static func generate(context: CompContext, type: Type) -> IRType {
-        return context.builder.createStruct(name: type.name)
+    func generate(context: CompContext, expression: ExpressionType) throws -> LLVMType
+}
+
+class AbstractLLVMGenerator<E: AbstractExpression, L> : LLVMGenerator {
+    typealias ExpressionType = E
+    typealias LLVMType = L
+    
+    func generate(context: CompContext, expression: E) throws -> L {
+        return 0 as! L
+    }
+}
+
+class IRTypeGenerator<E: AbstractExpression> : AbstractLLVMGenerator<E, IRType> {}
+class IRValueGenerator<E: AbstractExpression> : AbstractLLVMGenerator<E, IRValue> {}
+
+class TypeGen : IRTypeGenerator<TypeDefExpression> {
+    override func generate(context: CompContext, expression: TypeDefExpression) throws -> IRType {
+        let nodeType = try TypeUtils.extractType(fromExpression: expression)
+        
+        return context.builder.createStruct(name: nodeType.typeRecord.fullName)
+    }
+}
+
+struct OrbitAPI {
+    let context: CompContext
+    let name: String
+}
+
+class APIGen : AbstractLLVMGenerator<APIExpression, OrbitAPI> {
+    
+    override func generate(context: CompContext, expression: APIExpression) throws -> OrbitAPI {
+        let typeDefs = expression.body.filter { $0 is TypeDefExpression } as! [TypeDefExpression]
+        let typeGen = TypeGen()
+        
+        try typeDefs.forEach {
+            _ = try typeGen.generate(context: context, expression: $0)
+        }
+        
+        return OrbitAPI(context: context, name: context.module.name)
     }
 }
 
 class LLVMGen : CompilationPhase {
-    typealias InputType = ProgramType
-    typealias OutputType = CompContext
+    typealias InputType = RootExpression
+    typealias OutputType = [OrbitAPI]
     
-    func execute(input: ProgramType) throws -> CompContext {
-        let api = input.apis[0]
-        let context = CompContext(name: api.name)
+    let session: OrbitSession
+    
+    required init(session: OrbitSession) {
+        self.session = session
+    }
+    
+    func execute(input: RootExpression) throws -> [OrbitAPI] {
+        let prog = input.body[0] as! ProgramExpression
         
-        api.declaredTypes.forEach {
-            _ = context.find(type: $0)
+        return try prog.apis.map {
+            let nodeType = try TypeUtils.extractType(fromExpression: $0)
+            let apiGen = APIGen()
+            let context = CompContext(name: nodeType.typeRecord.fullName)
+            
+            return try apiGen.generate(context: context, expression: $0)
         }
-        
-        return context
     }
 }
