@@ -4,6 +4,7 @@ import OrbitFrontend
 @testable import OrbitBackend
 import cllvm
 import LLVM
+import SwiftyJSON
 
 class OrbitBackendTests : XCTestCase {
     
@@ -22,77 +23,90 @@ class OrbitBackendTests : XCTestCase {
 //        return ast
 //    }
     
-    func buildTestFile(testFileName: String) throws {
-        let session = OrbitSession()
+    func buildApiTestFile(testFileName: String) throws {
+        let session = OrbitSession(callingConvention: LLVMCallingConvention())
         
         let source = SourceResolver(session: session)
-        let lexer = Lexer(session: session)
-        let parser = ParseContext.bootstrapParser(session: session)
+        let bundle = Bundle(for: type(of: self))
+        let path = bundle.path(forResource: testFileName, ofType: "api")!
+        let code = try source.execute(input: path)
         
+        let reader = APIMapReader(session: session)
+        let result = try reader.execute(input: JSON(parseJSON: code))
+        
+        print(result)
+    }
+    
+    func buildTestFile(testFileName: String) throws {
+        let session = OrbitSession(callingConvention: LLVMCallingConvention())
+        
+        let source = SourceResolver(session: session)
         let bundle = Bundle(for: type(of: self))
         let path = bundle.path(forResource: testFileName, ofType: "orb")!
-        
         let code = try source.execute(input: path)
+        
+        let lexer = Lexer(session: session)
+        let annotationTokens = try lexer.execute(input: code)
+        let annotationParser = ParseContext(session: session, callingConvention: LLVMCallingConvention(), rules: [
+            AnnotationRule()
+        ], skipUnexpected: true)
+        
+        let annotatedRoot = try annotationParser.execute(input: annotationTokens)
+        let annotationExpressions = (annotatedRoot as! RootExpression).body as! [AnnotationExpression]
+        let annotations = annotationExpressions.map { PhaseAnnotation(expression: $0, identifier: $0.annotationName.value) }
+        
+        let parser = ParseContext.bootstrapParser(session: session)
         let tokens = try lexer.execute(input: code)
         let ast = try parser.execute(input: tokens)
         
-        let typeExtractor = TypeExtractor(session: session)
-        let types = try typeExtractor.execute(input: ast as! RootExpression)
-        
-        let typeResolver = TypeResolver(session: session)
-        let result = try typeResolver.execute(input: (ast as! RootExpression, types))
-        
-        let typeChecker = TypeChecker(session: session)
-        let verified = try typeChecker.execute(input: (ast as! RootExpression, types))
-        
-        print(verified.toJson())
-        typeChecker.session.popAll()
-        
-        let llvm = LLVMGen(session: session)
-        let gen = try llvm.execute(input: (ast as! RootExpression))
-        
-        gen.forEach {
-            $0.context.gen()
+        annotations.forEach {
+            (ast as! RootExpression).annotate(annotation: $0)
         }
         
-//        let typer = SimpleTyper()
-//        let typeMap = try typer.execute(input: ast as! RootExpression) as! ProgramType
-//
-//        let expander = TypeExpander()
-//        let expandedTypeMap = try expander.execute(input: typeMap)
-//
-//        print(expandedTypeMap.debug(level: 0))
-//
-//        let unique = Uniqueness()
-//        let prog = try unique.execute(input: expandedTypeMap)
-//
-//        let llvm = LLVMGen()
-//        let context = try llvm.execute(input: prog)
-//
-//        context.gen()
+        let root = ast as! RootExpression
+        var prog = root.body[0] as! ProgramExpression
         
-//        var context = try nr.execute(input: ast.body as! [APIExpression])
-//        context = try mr.execute(input: context)
+        let dependencyGraph = DependencyGraph(session: session)
+        let ordered = try dependencyGraph.execute(input: root)
+        
+        prog = ProgramExpression(apis: ordered, startToken: prog.startToken)
+        root.body = [prog]
+        
+        let typeExtractor = TypeExtractor(session: session)
+        let apis = try typeExtractor.execute(input: root)
+
+        let writer = APIMapWriter(session: session)
+        
+        apis.forEach {
+            let res = try! writer.execute(input: $0)
+            
+            print(res)
+        }
+        
+        let typeResolver = TypeResolver(session: session)
+        let result = try typeResolver.execute(input: (ast as! RootExpression, apis))
+        
+        let typeChecker = TypeChecker(session: session)
+        let verified = try typeChecker.execute(input: result)
+        
+        print(verified.toJson())
+        
+//        let llvm = LLVMGen(session: session)
+//        let gen = try llvm.execute(input: (ast as! RootExpression))
 //
-//        context = try traitResolver.execute(input: context)
-//
-//        let tr = TypeResolver()
-//        context = try tr.execute(input: context)
-//
-//        let gen = LLVMGenerator()
-//        let result = try gen.execute(input: context)
-//
-//        result.dump()
-//        try result.print(to: "/Users/davie/dev/other/Orb/test.ll")
-//
-//        try result.verify()
-//
-//        try TargetMachine().emitToFile(module: result, type: .assembly, path: "/Users/davie/dev/other/Orb/test.s")
+//        gen.forEach {
+//            $0.context.gen()
+//        }
+        
+//        typeChecker.session.popAll()
+        
+        session.popAll()
     }
     
     func testResolve() {
         do {
-            try buildTestFile(testFileName: "test1")
+            try buildApiTestFile(testFileName: "test1")
+            //try buildTestFile(testFileName: "test1")
         } catch let ex as OrbitError {
             print(ex.message)
         } catch let ex {

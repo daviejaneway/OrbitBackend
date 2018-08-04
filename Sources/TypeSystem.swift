@@ -10,6 +10,11 @@ import OrbitCompilerUtils
 import OrbitFrontend
 
 struct RedundantCodeAnnotation : DebuggableAnnotation {
+    let identifier = "Orb::Compiler::Backend::Annotations::RedundantCode"
+    
+    func equal(toOther annotation: Annotation) -> Bool {
+        return annotation.identifier == self.identifier
+    }
     
     func dump() -> String {
         return "@RedundantCode"
@@ -44,14 +49,16 @@ class MethodVerifier : TypeVerifier {
          */
         
         if let ret = expression.signature.returnType {
-            let retType = try TypeChecker.extractAnnotation(fromExpression: ret, annotationType: TypeRecordAnnotation.self)
-            let blockRetType = try TypeChecker.extractAnnotation(fromExpression: expression.body.returnStatement!, annotationType: TypeRecordAnnotation.self)
+            let retType = try TypeChecker.extractAnnotation(fromExpression: ret, annotationType: TypeAnnotation.self)
+            let blockRetType = try TypeChecker.extractAnnotation(fromExpression: expression.body.returnStatement!, annotationType: TypeAnnotation.self)
             
             guard TypeChecker.checkEquality(typeA: retType.typeRecord, typeB: blockRetType.typeRecord) else {
                 throw OrbitError(message: "Method declares return type of \(retType.typeRecord.fullName) but block returns \(blockRetType.typeRecord.fullName)")
             }
         } else if expression.body.returnStatement != nil {
-            session.push(warning: OrbitWarning(token: expression.body.startToken, message: "WARNING: This method declares a Unit return type. Return statements will be ignored.\nNOTE: This warning may become an error in future versions"))
+            let name = expression.signature.name.value
+            
+            session.push(warning: OrbitWarning(token: expression.body.startToken, message: "WARNING: Method '\(name)' declares a Unit return type. Return statements will be ignored.\nNOTE: This warning may become an error in future versions"))
             
             // Mark as redundant, future phases can safely throw this code away
             expression.body.returnStatement?.annotate(annotation: RedundantCodeAnnotation())
@@ -60,18 +67,33 @@ class MethodVerifier : TypeVerifier {
 }
 
 class TypeUtils {
-    static func extractType(fromExpression expression: AbstractExpression) throws -> TypeRecordAnnotation {
-        return try TypeChecker.extractAnnotation(fromExpression: expression, annotationType: TypeRecordAnnotation.self)
+    static func extractType(fromExpression expression: AbstractExpression) throws -> TypeAnnotation {
+        return try TypeChecker.extractAnnotation(fromExpression: expression, annotationType: TypeAnnotation.self)
+    }
+    
+    static func extractScope(fromExpression expression: AbstractExpression) throws -> ScopeAnnotation {
+        return try TypeChecker.extractAnnotation(fromExpression: expression, annotationType: ScopeAnnotation.self)
+    }
+    
+    static func isTypeResolved(forExpression expression: AbstractExpression) -> Bool {
+        do {
+            _ = try extractType(fromExpression: expression)
+        } catch {
+            return false
+        }
+        
+        return true
     }
 }
 
 class TypeChecker : CompilationPhase {
-    typealias InputType = (RootExpression, [TypeRecord])
+    typealias InputType = RootExpression
     typealias OutputType = RootExpression
     
+    let identifier = "Orb::Compiler::Backend::TypeChecker"
     public let session: OrbitSession
     
-    required init(session: OrbitSession) {
+    required init(session: OrbitSession, identifier: String = "") {
         self.session = session
     }
     
@@ -90,13 +112,13 @@ class TypeChecker : CompilationPhase {
         return typeA.fullName == typeB.fullName
     }
     
-    func execute(input: (RootExpression, [TypeRecord])) throws -> RootExpression {
-        let prog = input.0.body[0] as! ProgramExpression
+    func execute(input: RootExpression) throws -> RootExpression {
+        let prog = input.body[0] as! ProgramExpression
         let apis = prog.apis
         let apiVerifier = APIVerifier()
         
         try apis.forEach { try apiVerifier.verify(session: self.session, expression: $0) }
         
-        return input.0
+        return input
     }
 }

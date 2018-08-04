@@ -1,0 +1,84 @@
+{
+  "meta": {
+    "type": "APIMap",
+    "version": 0
+  },
+  "body": {
+    "exported_types": [
+      {
+        "meta": {
+          "type": "TypeRecord",
+          "version": 0
+        },
+        "body": {
+          "full_name": "Orb.Core.Bar",
+          "short_name": "Bar"
+        }
+      },
+      {
+        "meta": {
+          "type": "TypeRecord",
+          "version": 0
+        },
+        "body": {
+          "full_name": "A.Foo",
+          "short_name": "Foo"
+        }
+      }
+    ],
+    "exported_methods": [
+      {
+        "meta": {
+          "type": "SignatureTypeRecord",
+          "version": 0
+        },
+        "body": {
+          "name": "A.Foo.bar.A.Foo.Orb.Core.Bar",
+          "args": [
+            {
+              "meta": {
+                "type": "AbstractTypeRecord",
+                "version": 0
+              },
+              "body": {
+                "full_name": "A.Foo",
+                "short_name": "Foo"
+              }
+            },
+            {
+              "meta": {
+                "type": "AbstractTypeRecord",
+                "version": 0
+              },
+              "body": {
+                "full_name": "Orb.Core.Bar",
+                "short_name": "Bar"
+              }
+            }
+          ],
+          "return": {
+            "meta": {
+              "type": "AbstractTypeRecord",
+              "version": 0
+            },
+            "body": {
+              "full_name": "Orb.Core.Types.Unit",
+              "short_name": "()"
+            }
+          },
+          "receiver": {
+            "meta": {
+              "type": "AbstractTypeRecord",
+              "version": 0
+            },
+            "body": {
+              "full_name": "A.Foo",
+              "short_name": "Foo"
+            }
+          }
+        }
+      }
+    ],
+    "canonical_name": "A"
+  }
+}

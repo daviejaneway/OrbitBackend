@@ -207,7 +207,8 @@ extension APIExpression : JSONAwareExpression {
             "@node_type": "API",
             "value": self.name.value,
             "types": typeDefs.map { $0.toJson() },
-            "methods": methods.map { $0.toJson() }
+            "methods": methods.map { $0.toJson() },
+            "annotations": (self.annotations as! [DebuggableAnnotation]).map { $0.dump() }
         ]
     }
 }
@@ -219,7 +220,8 @@ extension ProgramExpression : JSONAwareExpression {
         
         return [
             "@node_type": "Program",
-            "apis": apis
+            "apis": apis,
+            "annotations": (self.annotations as! [DebuggableAnnotation]).map { $0.dump() }
         ]
     }
 }

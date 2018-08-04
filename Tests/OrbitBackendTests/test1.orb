@@ -1,3 +1,9 @@
-api Main within Orb::Core {
-    type Test()
+api A
+    with Orb::Core {
+
+    type Foo()
+
+    (self Foo) bar (b Orb::Core::Bar) () {
+        return 10
+    }
 }
