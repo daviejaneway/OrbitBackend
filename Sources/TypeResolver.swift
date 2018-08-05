@@ -216,10 +216,10 @@ public class APIMap {
         self.canonicalName = canonicalName
     }
     
-    public func findType(named: String) -> TypeRecord? {
+    public func findType(named: String) throws -> TypeRecord? {
         let results = self.exportedTypes.filter { $0.shortName == named || $0.fullName == named }
         
-        guard results.count == 1 else { return nil } // TODO - throw suitable error
+        guard results.count > 0 else { return nil }
         
         return results[0]
     }
@@ -315,7 +315,7 @@ public class TypeExtractor : ExtendablePhase {
         }
         
         func findType(named: String) throws -> AbstractTypeRecord {
-            guard let type = apiMap.findType(named: named) else { throw OrbitError(message: "Type '\(named)' not found") }
+            guard let type = try apiMap.findType(named: named) else { throw OrbitError(message: "Type '\(named)' not found") }
             
             return type
         }
@@ -410,8 +410,14 @@ public class Scope {
             throw customError ?? OrbitError(message: "Unknown type: \(named)")
         }
         
-        guard types.count < 2 else {
-            throw OrbitError(message: "Multiple types named \(named)")
+        if types.count > 1 {
+            let identical = types.reduce((true, types[0])) { (arg0, type) -> (Bool, AbstractTypeRecord) in
+                let (result, initial) = arg0
+                
+                return (result && (initial.fullName == type.fullName), type)
+            }
+            
+            guard identical.0 else { throw OrbitError(message: "Multiple types named '\(named)'") }
         }
         
         return types[0]
