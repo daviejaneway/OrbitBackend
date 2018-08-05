@@ -37,8 +37,20 @@ class OrbitBackendTests : XCTestCase {
         print(result)
     }
     
+    func findApiFileOnPaths() throws {
+        let session = OrbitSession(orbPaths: [URL(fileURLWithPath: "/usr/local/lib/Orbit/")], callingConvention: LLVMCallingConvention())
+        
+        let path = try session.findApiMap(named: "Orb.Core.api")
+        let source = SourceResolver(session: session)
+        let code = try source.execute(input: path.path)
+        let reader = APIMapReader(session: session)
+        let apiMap = try reader.execute(input: JSON(parseJSON: code))
+        
+        print(apiMap.export())
+    }
+    
     func buildTestFile(testFileName: String) throws {
-        let session = OrbitSession(callingConvention: LLVMCallingConvention())
+        let session = OrbitSession(orbPaths: [URL(fileURLWithPath: "/usr/local/lib/Orbit/")], callingConvention: LLVMCallingConvention())
         
         let source = SourceResolver(session: session)
         let bundle = Bundle(for: type(of: self))
@@ -105,8 +117,9 @@ class OrbitBackendTests : XCTestCase {
     
     func testResolve() {
         do {
-            try buildApiTestFile(testFileName: "test1")
-            //try buildTestFile(testFileName: "test1")
+            try findApiFileOnPaths()
+            //try buildApiTestFile(testFileName: "test1")
+            try buildTestFile(testFileName: "test1")
         } catch let ex as OrbitError {
             print(ex.message)
         } catch let ex {

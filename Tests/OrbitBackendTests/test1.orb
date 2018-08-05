@@ -1,5 +1,4 @@
-api A
-    with Orb::Core {
+api A with Orb::Core {
 
     type Foo()
 

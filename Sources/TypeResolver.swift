@@ -265,6 +265,16 @@ public class TypeExtractor : ExtendablePhase {
         
         if matches.count == 0 {
             // 2. Search known Orb paths for .api file
+            let url = try self.session.findApiMap(named: "\(named).api")
+            let source = SourceResolver(session: self.session)
+            let json = OrbitJsonConverter(session: self.session)
+            let chain1 = CompilationChain(inputPhase: source, outputPhase: json)
+            let reader = APIMapReader(session: self.session)
+            let chain2 = CompilationChain(inputPhase: chain1, outputPhase: reader)
+            
+            let apiMap = try chain2.execute(input: url.path)
+            
+            return apiMap
         }
         
         guard matches.count == 1 else { throw OrbitError(message: "Dependency '\(named)' not found") }

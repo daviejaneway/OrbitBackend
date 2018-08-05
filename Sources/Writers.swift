@@ -130,3 +130,24 @@ class APIMapReader : CompilationPhase {
         return try APIMap.import(body: body)
     }
 }
+
+public class OrbitJsonConverter : CompilationPhase {
+    public typealias InputType = String
+    public typealias OutputType = JSON
+    
+    public var identifier: String
+    public var session: OrbitSession
+    
+    public required init(session: OrbitSession, identifier: String) {
+        self.session = session
+        self.identifier = identifier
+    }
+    
+    public convenience init(session: OrbitSession) {
+        self.init(session: session, identifier: "Orb.Core.Compiler.Backend.OrbitJsonConverter")
+    }
+    
+    public func execute(input: String) throws -> JSON {
+        return JSON(parseJSON: input)
+    }
+}

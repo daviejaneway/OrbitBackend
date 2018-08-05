@@ -45,20 +45,25 @@ public class DependencyGraph : CompilationPhase {
                 self.map.append((api.name.value, w.value))
                 
                 idx = apis.enumerated().filter { $0.element.hashValue == api.hashValue }[0].offset
-                let widx = apis.enumerated().filter { $0.element.name.value == w.value }[0].offset
                 
-                let wapi = self.apis[widx]
-                
-                try self.order(api: wapi)
-                
-                idx = apis.enumerated().filter { $0.element.hashValue == api.hashValue }[0].offset
-                
-                _ = self.apis.remove(at: idx)
-                
-                if widx >= self.apis.count {
-                    self.apis.append(api)
+                if apis.contains(where: { $0.name.value == w.value }) {
+                    // Source code for API dependency is available
+                    let widx = apis.enumerated().filter { $0.element.name.value == w.value }[0].offset
+                    let wapi = self.apis[widx]
+                    
+                    try self.order(api: wapi)
+                    
+                    idx = apis.enumerated().filter { $0.element.hashValue == api.hashValue }[0].offset
+                    
+                    _ = self.apis.remove(at: idx)
+                    
+                    if widx >= self.apis.count {
+                        self.apis.append(api)
+                    } else {
+                        self.apis.insert(api, at: widx + 1)
+                    }
                 } else {
-                    self.apis.insert(api, at: widx + 1)
+                    // API dependency could be a precompiled .api file, check
                 }
             }
         }
