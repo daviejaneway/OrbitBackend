@@ -86,14 +86,14 @@ class TypeUtils {
     }
 }
 
-class TypeChecker : CompilationPhase {
-    typealias InputType = RootExpression
-    typealias OutputType = RootExpression
+public class TypeChecker : CompilationPhase {
+    public typealias InputType = RootExpression
+    public typealias OutputType = RootExpression
     
-    let identifier = "Orb::Compiler::Backend::TypeChecker"
+    public let identifier = "Orb::Compiler::Backend::TypeChecker"
     public let session: OrbitSession
     
-    required init(session: OrbitSession, identifier: String = "") {
+    public required init(session: OrbitSession, identifier: String = "") {
         self.session = session
     }
     
@@ -112,7 +112,7 @@ class TypeChecker : CompilationPhase {
         return typeA.fullName == typeB.fullName
     }
     
-    func execute(input: RootExpression) throws -> RootExpression {
+    public func execute(input: RootExpression) throws -> RootExpression {
         let prog = input.body[0] as! ProgramExpression
         let apis = prog.apis
         let apiVerifier = APIVerifier()
