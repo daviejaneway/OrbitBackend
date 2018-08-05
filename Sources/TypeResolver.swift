@@ -417,7 +417,9 @@ public class Scope {
                 return (result && (initial.fullName == type.fullName), type)
             }
             
-            guard identical.0 else { throw OrbitError(message: "Multiple types named '\(named)'") }
+            guard identical.0 else {
+                throw OrbitError(message: "Multiple types named '\(named)'. Try prepending the parent API, e.g. Foo -> Bar::Foo")
+            }
         }
         
         return types[0]
@@ -478,8 +480,9 @@ public class TypeResolver : ExtendablePhase {
         return type
     }
     
-    func resolve(typeDef: TypeDefExpression, scope: Scope) throws {
-        let type = try scope.findType(named: typeDef.name.value)
+    func resolve(typeDef: TypeDefExpression, scope: Scope, apiName: String) throws {
+        //let type = try scope.findType(named: typeDef.name.value)
+        let type = TypeRecord(shortName: typeDef.name.value, fullName: "\(apiName).\(typeDef.name.value)")
         
         typeDef.annotate(annotation: TypeAnnotation(typeRecord: type))
         
@@ -644,7 +647,7 @@ public class TypeResolver : ExtendablePhase {
         let type = TypeRecord(shortName: api.name.value, fullName: qualifiedName)
         
         let typeDefs = api.body.filter { $0 is TypeDefExpression } as! [TypeDefExpression]
-        try typeDefs.forEach { try resolve(typeDef: $0, scope: scope) }
+        try typeDefs.forEach { try resolve(typeDef: $0, scope: scope, apiName: qualifiedName) }
         
         let methods = api.body.filter { $0 is MethodExpression } as! [MethodExpression]
         try methods.forEach { try resolve(method: $0, scope: scope) }
@@ -679,7 +682,7 @@ public class TypeResolver : ExtendablePhase {
             case is Statement: _ = try resolve(statement: expression, scope: scope)
             case is RValueExpression: _ = try resolve(value: expression as! RValueExpression, scope: scope)
             case is PairExpression: _ = try resolve(pair: expression as! PairExpression, scope: scope)
-            case is TypeDefExpression: try resolve(typeDef: expression as! TypeDefExpression, scope: scope)
+            case is TypeDefExpression: try resolve(typeDef: expression as! TypeDefExpression, scope: scope, apiName: "")
             case is APIExpression: try resolve(api: expression as! APIExpression, scope: scope)
             
             default: throw OrbitError(message: "FATAL Cannot resolve expression \(expression)")
