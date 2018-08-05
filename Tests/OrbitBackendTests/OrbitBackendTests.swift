@@ -87,13 +87,13 @@ class OrbitBackendTests : XCTestCase {
         let typeExtractor = TypeExtractor(session: session)
         let apis = try typeExtractor.execute(input: root)
 
-        let writer = APIMapWriter(session: session)
+//        let writer = APIMapWriter(session: session)
         
-        apis.forEach {
-            let res = try! writer.execute(input: $0)
-            
-            print(res)
-        }
+//        apis.forEach {
+//            let res = try! writer.execute(input: $0)
+//
+//            print(res)
+//        }
         
         let typeResolver = TypeResolver(session: session)
         let result = try typeResolver.execute(input: (ast as! RootExpression, apis))
@@ -104,7 +104,7 @@ class OrbitBackendTests : XCTestCase {
         print(verified.toJson())
         
         let llvm = LLVMGen(session: session)
-        let gen = try llvm.execute(input: (ast as! RootExpression))
+        let gen = try llvm.execute(input: (ast as! RootExpression, apis))
 
         gen.forEach {
             $0.context.gen()
@@ -117,7 +117,7 @@ class OrbitBackendTests : XCTestCase {
     
     func testResolve() {
         do {
-            try findApiFileOnPaths()
+            //try findApiFileOnPaths()
             //try buildApiTestFile(testFileName: "test1")
             try buildTestFile(testFileName: "test1")
         } catch let ex as OrbitError {

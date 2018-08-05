@@ -36,6 +36,8 @@ public class AbstractTypeRecord : Equatable, APIMapExportable, Hashable {
     public let shortName: String
     public let fullName: String
     
+    var isImported = false
+    
     public init(shortName: String, fullName: String) {
         self.shortName = shortName
         self.fullName = fullName
@@ -215,6 +217,8 @@ public class APIMap {
     
     public let canonicalName: String
     
+    var isImported: Bool = false
+    
     init(canonicalName: String) {
         self.canonicalName = canonicalName
     }
@@ -238,6 +242,9 @@ public class APIMap {
     }
     
     public func importAll(fromAPI api: APIMap) {
+        api.exportedTypes.forEach { $0.isImported = true }
+        api.exportedMethods.forEach { $0.isImported = true }
+        
         self.exportedTypes.insert(contentsOf: api.exportedTypes, at: 0)
         self.exportedMethods.insert(contentsOf: api.exportedMethods, at: 0)
     }
@@ -276,6 +283,8 @@ public class TypeExtractor : ExtendablePhase {
             let chain2 = CompilationChain(inputPhase: chain1, outputPhase: reader)
             
             let apiMap = try chain2.execute(input: url.path)
+            
+            apiMap.isImported = true
             
             return apiMap
         }
@@ -329,6 +338,8 @@ public class TypeExtractor : ExtendablePhase {
         }
         
         try annotations.forEach { ann in
+            let exts = self.extensions
+            
             guard let ext = self.extensions[ann.annotationName.value] else {
                 throw OrbitError(message: "No extension named \(ann.annotationName.value) found for Phase \(self.identifier)")
             }
@@ -387,6 +398,8 @@ public class Scope {
         
         // A new scope level should always know about the types above
         self.typeMap = typeMap ?? parentScope.typeMap
+        
+        //self.declare(type: MethodTypeRecord.intInfixPlus)
     }
     
     func declare(type: AbstractTypeRecord) {
@@ -535,8 +548,35 @@ public class TypeResolver : ExtendablePhase {
         let type = opFunc.signature.ret
         
         binary.annotate(annotation: TypeAnnotation(typeRecord: type))
+        binary.annotate(annotation: MetaDataAnnotation(data: ["OperatorFunction": opFunc]))
         
         return type
+    }
+    
+    func resolve(assignment: AssignmentStatement, scope: Scope) throws -> AbstractTypeRecord {
+        let rhs = try resolve(value: assignment.value as! RValueExpression, scope: scope)
+        
+        if let lhsType = assignment.type {
+            let type = try resolve(typeId: lhsType, scope: scope)
+            // Dirty hack to allow annotations to skip type checking
+            let ignore = assignment.value is AnnotationExpression
+            
+            if !ignore && rhs != type {
+                throw OrbitError(message: "Assignment declares '\(assignment.name.value)' to be of type '\(type.fullName)', but right-hand side value is of type '\(rhs.fullName)'")
+            }
+            
+            assignment.annotate(annotation: TypeAnnotation(typeRecord: type))
+            
+            scope.bind(name: assignment.name.value, toType: type)
+            
+            return type
+        }
+        
+        assignment.annotate(annotation: TypeAnnotation(typeRecord: rhs))
+        
+        scope.bind(name: assignment.name.value, toType: rhs)
+        
+        return rhs
     }
     
     func resolve(staticCall: StaticCallExpression, scope: Scope) throws -> AbstractTypeRecord {
@@ -576,6 +616,7 @@ public class TypeResolver : ExtendablePhase {
             case is StaticCallExpression: return try resolve(staticCall: value as! StaticCallExpression, scope: scope)
             case is UnaryExpression: return try resolve(unary: value as! UnaryExpression, scope: scope)
             case is BinaryExpression: return try resolve(binary: value as! BinaryExpression, scope: scope)
+            case is AnnotationExpression: return try resolve(annotation: value as! AnnotationExpression, scope: scope)
             
             default: throw OrbitError(message: "Could not resolve type of expression: \(value)")
         }
@@ -584,6 +625,8 @@ public class TypeResolver : ExtendablePhase {
     func resolve(statement: AbstractExpression, scope: Scope) throws -> AbstractTypeRecord {
         switch statement {
             case is StaticCallExpression: return try resolve(staticCall: statement as! StaticCallExpression, scope: scope)
+            case is AnnotationExpression: return try resolve(annotation: statement as! AnnotationExpression, scope: scope)
+            case is AssignmentStatement: return try resolve(assignment: statement as! AssignmentStatement, scope: scope)
             
             default: throw OrbitError(message: "FATAL Unsupport statement \(statement)")
         }
@@ -591,7 +634,7 @@ public class TypeResolver : ExtendablePhase {
     
     func resolve(block: BlockExpression, scope: Scope) throws {
         try block.body.forEach {
-            _ = try resolve(statement: ($0 as! AbstractExpression), scope: scope)
+            _ = try resolve(statement: ($0 as AbstractExpression), scope: scope)
         }
         
         guard let ret = block.returnStatement else {
@@ -673,12 +716,14 @@ public class TypeResolver : ExtendablePhase {
         api.annotate(annotation: TypeAnnotation(typeRecord: type))
     }
     
-    func resolve(annotation: AnnotationExpression, scope: Scope) throws {
+    func resolve(annotation: AnnotationExpression, scope: Scope) throws -> AbstractTypeRecord {
         try annotation.parameters.forEach {
             try resolve(expression: $0, scope: scope)
         }
         
         annotation.annotate(annotation: ScopeAnnotation(scope: scope))
+        
+        return AbstractTypeRecord(shortName: "", fullName: "")
     }
     
     func resolve(expression: AbstractExpression, scope: Scope) throws {
@@ -699,6 +744,8 @@ public class TypeResolver : ExtendablePhase {
     public func execute(input: (RootExpression, [APIMap])) throws -> RootExpression {
         let prog = input.0.body[0] as! ProgramExpression
         let apis = prog.apis
+        
+        
         
         try zip(apis, input.1.enumerated()).forEach { (arg) in
             let (api, typeMap) = arg
