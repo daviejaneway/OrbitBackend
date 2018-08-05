@@ -103,12 +103,12 @@ class OrbitBackendTests : XCTestCase {
         
         print(verified.toJson())
         
-//        let llvm = LLVMGen(session: session)
-//        let gen = try llvm.execute(input: (ast as! RootExpression))
-//
-//        gen.forEach {
-//            $0.context.gen()
-//        }
+        let llvm = LLVMGen(session: session)
+        let gen = try llvm.execute(input: (ast as! RootExpression))
+
+        gen.forEach {
+            $0.context.gen()
+        }
         
 //        typeChecker.session.popAll()
         

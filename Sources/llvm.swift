@@ -48,7 +48,7 @@ public class CompContext {
         return t
     }
     
-    func gen() {
+    public func gen() {
         self.module.dump()
     }
 }
