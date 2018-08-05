@@ -43,7 +43,7 @@ public class AbstractTypeRecord : Equatable, APIMapExportable {
         return lhs.shortName == rhs.shortName || lhs.fullName == rhs.fullName
     }
     
-    func exportBody() -> JSON {
+    public func exportBody() -> JSON {
         return [
             AbstractTypeRecord.API_MAP_KEY_FULL_NAME: self.fullName,
             AbstractTypeRecord.API_MAP_KEY_SHORT_NAME: self.shortName
@@ -58,7 +58,7 @@ public class TypeRecord : AbstractTypeRecord, APIMapImportable {
     static let real = TypeRecord(shortName: "Real", fullName: "Orb.Core.Types.Real")
     static let op = TypeRecord(shortName: "Operator", fullName: "Orb.Core.Types.Operator")
     
-    class func `import`<T>(body: JSON, type: T.Type) throws -> T {
+    public class func `import`<T>(body: JSON, type: T.Type) throws -> T {
         let body = body["body"]
         
         guard let fname = body[AbstractTypeRecord.API_MAP_KEY_FULL_NAME].string else {
@@ -100,7 +100,7 @@ public class SignatureTypeRecord : AbstractTypeRecord, APIMapImportable {
         return "(\(self.receiver.fullName) \(self.shortName) (\(self.args.map { $0.fullName }.joined(separator: ","))) (\(self.ret.fullName))"
     }
     
-    override func exportBody() -> JSON {
+    override public func exportBody() -> JSON {
         return [
             SignatureTypeRecord.API_MAP_KEY_NAME: self.fullName,
             SignatureTypeRecord.API_MAP_KEY_RECEIVER: self.receiver.export(),
@@ -109,7 +109,7 @@ public class SignatureTypeRecord : AbstractTypeRecord, APIMapImportable {
         ]
     }
     
-    static func `import`<T>(body: JSON, type: T.Type) throws -> T {
+    public static func `import`<T>(body: JSON, type: T.Type) throws -> T {
         let body = body["body"]
         
         guard let name = body[SignatureTypeRecord.API_MAP_KEY_NAME].string else {

@@ -9,13 +9,13 @@ import OrbitCompilerUtils
 import OrbitFrontend
 import SwiftyJSON
 
-extension OrbitError {
+public extension OrbitError {
     static func missingAPIMapKey(key: String) -> OrbitError {
         return OrbitError(message: "API Map missing key: \(key)")
     }
 }
 
-protocol APIMapExportable {
+public protocol APIMapExportable {
     static var exportTypeKey: String { get }
     static var exportVersion: Int { get }
     
@@ -24,17 +24,17 @@ protocol APIMapExportable {
     func export() -> JSON
 }
 
-protocol APIMapImportable {
+public protocol APIMapImportable {
     static func `import`<T>(body: JSON, type: T.Type) throws -> T
 }
 
-extension APIMapImportable {
+public extension APIMapImportable {
     static func `import`(body: JSON) throws -> Self {
         return try `import`(body: body, type: self)
     }
 }
 
-extension APIMapExportable {
+public extension APIMapExportable {
     static var exportTypeKey: String {
         return String(describing: Self.self)
     }
@@ -59,7 +59,7 @@ extension APIMapExportable {
 }
 
 extension APIMap : APIMapExportable {
-    func exportBody() -> JSON {
+    public func exportBody() -> JSON {
         return [
             APIMap.API_MAP_KEY_CANONICAL_NAME: self.canonicalName,
             APIMap.API_MAP_KEY_EXPORTED_TYPES: self.exportedTypes.map { $0.export() },
@@ -69,7 +69,7 @@ extension APIMap : APIMapExportable {
 }
 
 extension APIMap : APIMapImportable {
-    static func `import`<T>(body: JSON, type: T.Type) throws -> T {
+    public static func `import`<T>(body: JSON, type: T.Type) throws -> T {
         guard let name = body[APIMap.API_MAP_KEY_CANONICAL_NAME].string else { throw OrbitError.missingAPIMapKey(key: APIMap.API_MAP_KEY_CANONICAL_NAME) }
         guard let types = body[APIMap.API_MAP_KEY_EXPORTED_TYPES].array else { throw OrbitError.missingAPIMapKey(key: APIMap.API_MAP_KEY_EXPORTED_TYPES) }
         guard let methods = body[APIMap.API_MAP_KEY_EXPORTED_METHODS].array else { throw OrbitError.missingAPIMapKey(key: APIMap.API_MAP_KEY_EXPORTED_METHODS) }
@@ -87,44 +87,44 @@ extension APIMap : APIMapImportable {
     }
 }
 
-class APIMapWriter : CompilationPhase {
-    typealias InputType = APIMap
-    typealias OutputType = JSON
+public class APIMapWriter : CompilationPhase {
+    public typealias InputType = APIMap
+    public typealias OutputType = JSON
     
-    let identifier: String
-    let session: OrbitSession
+    public let identifier: String
+    public let session: OrbitSession
     
-    required init(session: OrbitSession, identifier: String) {
+    public required init(session: OrbitSession, identifier: String) {
         self.session = session
         self.identifier = identifier
     }
     
-    convenience init(session: OrbitSession) {
+    public convenience init(session: OrbitSession) {
         self.init(session: session, identifier: "Orb.Compiler.Backend.APIMapWriter")
     }
     
-    func execute(input: APIMap) throws -> JSON {
+    public func execute(input: APIMap) throws -> JSON {
         return input.export()
     }
 }
 
-class APIMapReader : CompilationPhase {
-    typealias InputType = JSON
-    typealias OutputType = APIMap
+public class APIMapReader : CompilationPhase {
+    public typealias InputType = JSON
+    public typealias OutputType = APIMap
     
-    let identifier: String
-    let session: OrbitSession
+    public let identifier: String
+    public let session: OrbitSession
     
-    required init(session: OrbitSession, identifier: String) {
+    public required init(session: OrbitSession, identifier: String) {
         self.session = session
         self.identifier = identifier
     }
     
-    convenience init(session: OrbitSession) {
+    public convenience init(session: OrbitSession) {
         self.init(session: session, identifier: "Orb.Compiler.Backend.APIMapReader")
     }
     
-    func execute(input: JSON) throws -> APIMap {
+    public func execute(input: JSON) throws -> APIMap {
         let body = input["body"]
         
         return try APIMap.import(body: body)
