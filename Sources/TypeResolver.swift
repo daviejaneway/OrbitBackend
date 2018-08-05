@@ -27,7 +27,9 @@ extension PhaseAnnotation : DebuggableAnnotation {
     }
 }
 
-public class AbstractTypeRecord : Equatable, APIMapExportable {
+public class AbstractTypeRecord : Equatable, APIMapExportable, Hashable {
+    public let hashValue: Int
+    
     static let API_MAP_KEY_FULL_NAME = "full_name"
     static let API_MAP_KEY_SHORT_NAME = "short_name"
     
@@ -37,6 +39,7 @@ public class AbstractTypeRecord : Equatable, APIMapExportable {
     public init(shortName: String, fullName: String) {
         self.shortName = shortName
         self.fullName = fullName
+        self.hashValue = fullName.hashValue
     }
     
     public static func ==(lhs: AbstractTypeRecord, rhs: AbstractTypeRecord) -> Bool {
@@ -418,7 +421,11 @@ public class Scope {
             }
             
             guard identical.0 else {
-                throw OrbitError(message: "Multiple types named '\(named)'. Try prepending the parent API, e.g. Foo -> Bar::Foo")
+                let unique = Array(Set<AbstractTypeRecord>(types))
+                
+                let errorMessage = "PROBLEM:\n\tMultiple types found for name '\(named)':\n\t\t\(unique.map { $0.fullName }.joined(separator: "\n\t\t"))\n\nSOLUTION:\n\tPrepend namespace to resolve conflict"
+                
+                throw OrbitError(message: errorMessage)
             }
         }
         
