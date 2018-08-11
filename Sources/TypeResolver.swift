@@ -61,7 +61,7 @@ public class TypeRecord : AbstractTypeRecord, APIMapImportable {
     static let unit = TypeRecord(shortName: "()", fullName: "Orb.Core.Types.Unit")
     static let int = TypeRecord(shortName: "Int", fullName: "Orb.Core.Types.Int")
     static let real = TypeRecord(shortName: "Real", fullName: "Orb.Core.Types.Real")
-    static let op = TypeRecord(shortName: "Operator", fullName: "Orb.Core.Types.Operator")
+    static let op = TypeRecord(shortName: "Operator", fullName: "Orb.Core.Operators.Operator")
     
     public class func `import`<T>(body: JSON, type: T.Type) throws -> T {
         let body = body["body"]
@@ -83,9 +83,9 @@ public class SignatureTypeRecord : AbstractTypeRecord, APIMapImportable {
     private static let API_MAP_KEY_ARGS = "args"
     private static let API_MAP_KEY_RETURN = "return"
     
-    static let intPrefixPlus = SignatureTypeRecord(shortName: "+", receiver: TypeRecord.op, ret: TypeRecord.int, args: [TypeRecord.int])
+    //static let intPrefixPlus = SignatureTypeRecord(shortName: "+", receiver: TypeRecord.op, ret: TypeRecord.int, args: [TypeRecord.int])
     
-    static let intInfixPlus = SignatureTypeRecord(shortName: "+", receiver: TypeRecord.op, ret: TypeRecord.int, args: [TypeRecord.int, TypeRecord.int])
+    //static let intInfixPlus = SignatureTypeRecord(shortName: "+", receiver: TypeRecord.op, ret: TypeRecord.int, args: [TypeRecord.int, TypeRecord.int])
     
     let receiver: AbstractTypeRecord
     let ret: AbstractTypeRecord
@@ -134,8 +134,8 @@ public class SignatureTypeRecord : AbstractTypeRecord, APIMapImportable {
 }
 
 public class MethodTypeRecord : AbstractTypeRecord {
-    static let intPrefixPlus = MethodTypeRecord(shortName: "+", signature: SignatureTypeRecord.intPrefixPlus)
-    static let intInfixPlus = MethodTypeRecord(shortName: "+", signature: SignatureTypeRecord.intInfixPlus)
+    //static let intPrefixPlus = MethodTypeRecord(shortName: "+", signature: SignatureTypeRecord.intPrefixPlus)
+    //static let intInfixPlus = MethodTypeRecord(shortName: "+", signature: SignatureTypeRecord.intInfixPlus)
     
     public let signature: SignatureTypeRecord
     
@@ -245,8 +245,26 @@ public class APIMap {
         api.exportedTypes.forEach { $0.isImported = true }
         api.exportedMethods.forEach { $0.isImported = true }
         
-        self.exportedTypes.insert(contentsOf: api.exportedTypes, at: 0)
-        self.exportedMethods.insert(contentsOf: api.exportedMethods, at: 0)
+        api.exportedTypes.forEach { type in
+            guard !self.exportedTypes.contains(type) else { return }
+            self.exportedTypes.insert(type, at: 0)
+        }
+        
+        api.exportedMethods.forEach { method in
+            guard !self.exportedMethods.contains(method) else { return }
+            self.exportedMethods.insert(method, at: 0)
+        }
+        
+//        self.exportedTypes.insert(contentsOf: api.exportedTypes, at: 0)
+//        self.exportedMethods.insert(contentsOf: api.exportedMethods, at: 0)
+    }
+    
+    static func mergeAll(apis: [APIMap]) -> APIMap {
+        let nMap = APIMap(canonicalName: "")
+        
+        apis.forEach { nMap.importAll(fromAPI: $0) }
+        
+        return nMap
     }
 }
 
@@ -269,29 +287,69 @@ public class TypeExtractor : ExtendablePhase {
         self.session = session
     }
     
-    private func findDependency(named: String) throws -> APIMap {
+    private func findDependency(named: String) throws -> [APIMap] {
         // 1. Search for referenced API in file scope (multiple apis per file is allowed)
         let matches = self.apiMaps.filter { $0.canonicalName == named }
         
         if matches.count == 0 {
-            // 2. Search known Orb paths for .api file
-            let url = try self.session.findApiMap(named: "\(named).api")
+            // 2. Search known Orb paths for .orb or .api file
+            
+            let path = try self.session.findOrbitFile(named: named)
             let source = SourceResolver(session: self.session)
-            let json = OrbitJsonConverter(session: self.session)
-            let chain1 = CompilationChain(inputPhase: source, outputPhase: json)
-            let reader = APIMapReader(session: self.session)
-            let chain2 = CompilationChain(inputPhase: chain1, outputPhase: reader)
             
-            let apiMap = try chain2.execute(input: url.path)
-            
-            apiMap.isImported = true
-            
-            return apiMap
+            if path.format == .API {
+                // Dependency is precompiled, import the .api map
+                let json = OrbitJsonConverter(session: self.session)
+                let chain1 = CompilationChain(inputPhase: source, outputPhase: json)
+                let reader = APIMapReader(session: self.session)
+                let chain2 = CompilationChain(inputPhase: chain1, outputPhase: reader)
+                
+                let apiMap = try chain2.execute(input: path.url.path)
+                
+                apiMap.isImported = true
+                
+                return [apiMap]
+            } else {
+                // Dependency is source file, recursively compile
+                let lexer = Lexer(session: self.session)
+                let parser = ParseContext.bootstrapParser(session: self.session)
+                let chain1 = CompilationChain(inputPhase: lexer, outputPhase: parser)
+                let chain2 = CompilationChain(inputPhase: source, outputPhase: chain1)
+                let ast = try chain2.execute(input: path.url.path)
+                
+                let root = ast as! RootExpression
+                var prog = root.body[0] as! ProgramExpression
+                
+                let dependencyGraph = DependencyGraph(session: session)
+                let ordered = try dependencyGraph.execute(input: root)
+                
+                prog = ProgramExpression(apis: ordered, startToken: prog.startToken)
+                root.body = [prog]
+                
+                //let typeExtractor = TypeExtractor(session: session)
+                let apis = try self.execute(input: root)
+                
+//                let dep = APIMap(canonicalName: named)
+//
+//                apis.forEach {
+//                    dep.importAll(fromAPI: $0)
+//                }
+                
+                let typeResolver = TypeResolver(session: session)
+                let result = try typeResolver.execute(input: (ast as! RootExpression, apis))
+                
+                let typeChecker = TypeChecker(session: session)
+                _ = try typeChecker.execute(input: result)
+                
+                return apis
+            }
+        } else if matches.count > 1 {
+            throw OrbitError(message: "Multiple dependencies found for name '\(named)'")
         }
         
-        guard matches.count == 1 else { throw OrbitError(message: "Dependency '\(named)' not found") }
+        guard matches.count > 0 else { throw OrbitError(message: "Dependency '\(named)' not found") }
         
-        return matches[0]
+        return matches
     }
     
     func extractTypes(fromApi api: APIExpression) throws -> APIMap {
@@ -309,9 +367,9 @@ public class TypeExtractor : ExtendablePhase {
         
         if let with = api.with {
             for w in with.withs {
-                let dep = try findDependency(named: w.value)
+                let deps = try findDependency(named: w.value)
                 
-                apiMap.importAll(fromAPI: dep)
+                deps.forEach { apiMap.importAll(fromAPI: $0) }
             }
         }
         
@@ -501,7 +559,6 @@ public class TypeResolver : ExtendablePhase {
     }
     
     func resolve(typeDef: TypeDefExpression, scope: Scope, apiName: String) throws {
-        //let type = try scope.findType(named: typeDef.name.value)
         let type = TypeRecord(shortName: typeDef.name.value, fullName: "\(apiName).\(typeDef.name.value)")
         
         typeDef.annotate(annotation: TypeAnnotation(typeRecord: type))
@@ -543,9 +600,16 @@ public class TypeResolver : ExtendablePhase {
         
         let opFuncName = "\(TypeRecord.op.fullName).\(binary.op.symbol).\(leftType.fullName).\(rightType.fullName)"
         let error = OrbitError(message: "Infix Operator function '\(binary.op.symbol)' is not defined with parameter types (\(leftType.fullName), \(rightType.fullName))")
-        let opFunc = try scope.findType(named: opFuncName, customError: error) as! MethodTypeRecord
         
-        let type = opFunc.signature.ret
+        let opFunc = try scope.findType(named: opFuncName, customError: error)
+        
+        let type: AbstractTypeRecord
+        
+        if opFunc is MethodTypeRecord {
+            type = (opFunc as! MethodTypeRecord).signature.ret
+        } else {
+            type = (opFunc as! SignatureTypeRecord).ret
+        }
         
         binary.annotate(annotation: TypeAnnotation(typeRecord: type))
         binary.annotate(annotation: MetaDataAnnotation(data: ["OperatorFunction": opFunc]))
@@ -585,16 +649,24 @@ public class TypeResolver : ExtendablePhase {
         let fname = "\(receiver.fullName).\(staticCall.methodName.value).\(args.joined(separator: "."))"
         
         let error = OrbitError(message: "Method '\(fname)' not declared in current scope")
-        let fn = try scope.findType(named: fname, customError: error) as! MethodTypeRecord
+        let fn = try scope.findType(named: fname, customError: error)
         
-        let annotation = TypeAnnotation(typeRecord: fn.signature.ret)
+        let type: AbstractTypeRecord
+        
+        if fn is MethodTypeRecord {
+            type = (fn as! MethodTypeRecord).signature.ret
+        } else {
+            type = (fn as! SignatureTypeRecord).ret
+        }
+        
+        let annotation = TypeAnnotation(typeRecord: type)
         
         staticCall.annotate(annotation: annotation)
         staticCall.methodName.annotate(annotation: annotation)
         
         staticCall.annotate(annotation: MetaDataAnnotation(data: ["ExpandedMethodName": fname]))
         
-        return fn.signature.ret
+        return type
     }
     
     func resolve(identifier: IdentifierExpression, scope: Scope) throws -> AbstractTypeRecord {
@@ -745,16 +817,13 @@ public class TypeResolver : ExtendablePhase {
         let prog = input.0.body[0] as! ProgramExpression
         let apis = prog.apis
         
+        let apiMap = APIMap.mergeAll(apis: input.1)
         
-        
-        try zip(apis, input.1.enumerated()).forEach { (arg) in
-            let (api, typeMap) = arg
-            try resolve(api: api, scope: Scope(parentScope: Scope.global, typeMap: typeMap.element.exportedTypes))
+        try apis.forEach { api in
+            let exports = (apiMap.exportedTypes as [AbstractTypeRecord]) + (apiMap.exportedMethods as [AbstractTypeRecord])
+            
+            try resolve(api: api, scope: Scope(parentScope: Scope.global, typeMap: exports))
         }
-        
-//        let types = input.1.flatMap { $0.exportedTypes }
-//
-//        try apis.forEach { try resolve(api: $0, scope: Scope(parentScope: Scope.global, typeMap: types)) }
         
         return input.0
     }

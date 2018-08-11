@@ -17,6 +17,8 @@ public class CompContext {
     
     private var types = [String : IRType]()
     private var bindings = [String : IRValue]()
+    private var _builtTypes = [String : IRType]()
+    private var _builtFuncs = [String : Function]()
     
     let llvmGen: LLVMGen
     
@@ -40,11 +42,27 @@ public class CompContext {
     }
     
     func addFunction(named: String, type: FunctionType) -> Function {
-        return self.builder.addFunction(hash(str: named), type: type)
+        guard let fn = self._builtFuncs[named] else {
+            let fn = self.builder.addFunction(hash(str: named), type: type)
+            
+            self._builtFuncs[named] = fn
+            
+            return fn
+        }
+        
+        return fn
     }
     
     func createType(named: String, propertyTypes: [IRType]? = nil, isPacked: Bool = true) -> IRType {
-        return self.builder.createStruct(name: hash(str: named), types: propertyTypes, isPacked: isPacked)
+        guard let type = self._builtTypes[named] else {
+            let type = self.builder.createStruct(name: hash(str: named), types: propertyTypes, isPacked: isPacked)
+            
+            self._builtTypes[named] = type
+            
+            return type
+        }
+        
+        return type
     }
     
     func function(named: String) -> Function? {
@@ -339,8 +357,8 @@ class APIGen : AbstractLLVMGenerator<APIExpression, OrbitAPI> {
 }
 
 /// Inserts a main method that can be called by the LLVM toolchain
-class EntryPointExtension : PhaseExtension {
-    static let identifier = "Orb.Compiler.Backend.LLVM.EntryPoint"
+    class EntryPointExtension : PhaseExtension {
+    static let identifier = "LLVM.EntryPoint"
     let extensionName = EntryPointExtension.identifier
     let parameterTypes: [AbstractExpression.Type] = []
     
@@ -361,7 +379,7 @@ class EntryPointExtension : PhaseExtension {
 }
 
 class IntegerAliasExtension : PhaseExtension {
-    static let identifier = "Orb.Compiler.Backend.LLVM.IntegerAlias"
+    static let identifier = "LLVM.IntegerAlias"
     
     let extensionName = IntegerAliasExtension.identifier
     let parameterTypes: [AbstractExpression.Type] = [TypeIdentifierExpression.self, IntLiteralExpression.self]
@@ -379,7 +397,7 @@ class IntegerAliasExtension : PhaseExtension {
 }
 
 class FloatAliasExtension : PhaseExtension {
-    static let identifier = "Orb.Compiler.Backend.LLVM.FloatAlias"
+    static let identifier = "LLVM.FloatAlias"
     
     let extensionName = FloatAliasExtension.identifier
     let parameterTypes: [AbstractExpression.Type] = [TypeIdentifierExpression.self, IntLiteralExpression.self]
@@ -442,11 +460,28 @@ class InsertAddExtension : PhaseExtension {
     }
 }
 
+class InsertUnaryMinusExtension : PhaseExtension {
+    let extensionName = "Neg"
+    let parameterTypes: [AbstractExpression.Type] = [IntLiteralExpression.self]
+    
+    func execute<T>(phase: T, annotation: AnnotationExpression) throws -> AbstractExpression where T : CompilationPhase {
+        let llvmGen = phase as! LLVMGen
+        let context = llvmGen.currentContext!
+        
+        let operand = try ValueGenerator().generate(context: context, expression: annotation.parameters[0])
+        let result = context.builder.buildNeg(operand)
+        
+        annotation.annotate(annotation: IRValueAnnotation(value: result))
+        
+        return annotation
+    }
+}
+
 public class LLVMGen : CompilationPhase {
     public typealias InputType = (RootExpression, [APIMap])
     public typealias OutputType = [OrbitAPI]
     
-    public let identifier = "Orb.Compiler.Backend.LLVM"
+    public let identifier = "LLVM"
     public let session: OrbitSession
     
     var aliasPool = [String : IRType]()

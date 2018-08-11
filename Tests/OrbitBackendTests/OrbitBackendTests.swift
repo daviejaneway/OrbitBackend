@@ -40,9 +40,9 @@ class OrbitBackendTests : XCTestCase {
     func findApiFileOnPaths() throws {
         let session = OrbitSession(orbPaths: [URL(fileURLWithPath: "/usr/local/lib/Orbit/")], callingConvention: LLVMCallingConvention())
         
-        let path = try session.findApiMap(named: "Orb.Core.api")
+        let path = try session.findOrbitFile(named: "Orb.Core.api")
         let source = SourceResolver(session: session)
-        let code = try source.execute(input: path.path)
+        let code = try source.execute(input: path.url.path)
         let reader = APIMapReader(session: session)
         let apiMap = try reader.execute(input: JSON(parseJSON: code))
         
@@ -50,12 +50,12 @@ class OrbitBackendTests : XCTestCase {
     }
     
     func buildTestFile(testFileName: String) throws {
-        let session = OrbitSession(orbPaths: [URL(fileURLWithPath: "/usr/local/lib/Orbit/"), URL(fileURLWithPath: "/Users/davie/dev/other/Orb/")], callingConvention: LLVMCallingConvention())
+        let session = OrbitSession(orbPaths: [URL(fileURLWithPath: "/usr/local/lib/Orbit/Core/"), URL(fileURLWithPath: "/Users/davie/dev/other/Orb/")], callingConvention: LLVMCallingConvention())
         
         let source = SourceResolver(session: session)
 //        let bundle = Bundle(for: type(of: self))
 //        let path = bundle.path(forResource: testFileName, ofType: "orb")!
-        let code = try source.execute(input: "/Users/davie/dev/other/Orb/Foo.orb") //path)
+        let code = try source.execute(input: "/Users/davie/dev/other/Orb/T2.orb") //path)
         
         let lexer = Lexer(session: session)
         let annotationTokens = try lexer.execute(input: code)

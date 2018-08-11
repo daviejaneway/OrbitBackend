@@ -169,6 +169,7 @@ public struct SHA1 {
     
     /// Return a hexadecimal hash from a string
     public static func hexString(from str:String) -> String? {
+        //return str
         guard var data = str.data(using: .utf8) else { return nil }
         return hexString(SHA1.process(data: &data))
     }
