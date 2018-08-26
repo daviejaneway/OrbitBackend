@@ -134,9 +134,6 @@ public class SignatureTypeRecord : AbstractTypeRecord, APIMapImportable {
 }
 
 public class MethodTypeRecord : AbstractTypeRecord {
-    //static let intPrefixPlus = MethodTypeRecord(shortName: "+", signature: SignatureTypeRecord.intPrefixPlus)
-    //static let intInfixPlus = MethodTypeRecord(shortName: "+", signature: SignatureTypeRecord.intInfixPlus)
-    
     public let signature: SignatureTypeRecord
     
     public init(shortName: String, signature: SignatureTypeRecord) {
@@ -287,7 +284,7 @@ public class TypeExtractor : ExtendablePhase {
         self.session = session
     }
     
-    private func findDependency(named: String) throws -> [APIMap] {
+    private func findDependency(named: String) throws -> ([APIMap], [OrbitAPI]) {
         // 1. Search for referenced API in file scope (multiple apis per file is allowed)
         let matches = self.apiMaps.filter { $0.canonicalName == named }
         
@@ -308,7 +305,7 @@ public class TypeExtractor : ExtendablePhase {
                 
                 apiMap.isImported = true
                 
-                return [apiMap]
+                return ([apiMap], [])
             } else {
                 // Dependency is source file, recursively compile
                 let lexer = Lexer(session: self.session)
@@ -325,23 +322,18 @@ public class TypeExtractor : ExtendablePhase {
                 
                 prog = ProgramExpression(apis: ordered, startToken: prog.startToken)
                 root.body = [prog]
-                
-                //let typeExtractor = TypeExtractor(session: session)
                 let apis = try self.execute(input: root)
-                
-//                let dep = APIMap(canonicalName: named)
-//
-//                apis.forEach {
-//                    dep.importAll(fromAPI: $0)
-//                }
                 
                 let typeResolver = TypeResolver(session: session)
                 let result = try typeResolver.execute(input: (ast as! RootExpression, apis))
                 
                 let typeChecker = TypeChecker(session: session)
-                _ = try typeChecker.execute(input: result)
+                let verified = try typeChecker.execute(input: result)
                 
-                return apis
+                let llvm = LLVMGen(session: self.session)
+                let libs = try llvm.execute(input: (verified, apis))
+                
+                return (apis, libs)
             }
         } else if matches.count > 1 {
             throw OrbitError(message: "Multiple dependencies found for name '\(named)'")
@@ -349,7 +341,7 @@ public class TypeExtractor : ExtendablePhase {
         
         guard matches.count > 0 else { throw OrbitError(message: "Dependency '\(named)' not found") }
         
-        return matches
+        return (matches, [])
     }
     
     func extractTypes(fromApi api: APIExpression) throws -> APIMap {
@@ -369,14 +361,19 @@ public class TypeExtractor : ExtendablePhase {
             for w in with.withs {
                 let deps = try findDependency(named: w.value)
                 
-                deps.forEach { apiMap.importAll(fromAPI: $0) }
+                deps.0.forEach {
+                    apiMap.importAll(fromAPI: $0)
+                }
+                
+                api.annotate(annotation: OrbitAPIAnnotation(apis: deps.1))
             }
         }
         
         try typeDefs.forEach { td in
             let qualifiedName = "\(apiMap.canonicalName).\(td.name.value)"
+            
             let tr = TypeRecord(shortName: td.name.value, fullName: qualifiedName)
-
+            
             if self.types.contains(tr) {
                 throw OrbitError(message: "Duplicate type: \(td.name.value)")
             }
@@ -396,8 +393,6 @@ public class TypeExtractor : ExtendablePhase {
         }
         
         try annotations.forEach { ann in
-            let exts = self.extensions
-            
             guard let ext = self.extensions[ann.annotationName.value] else {
                 throw OrbitError(message: "No extension named \(ann.annotationName.value) found for Phase \(self.identifier)")
             }
@@ -569,8 +564,6 @@ public class TypeResolver : ExtendablePhase {
     }
     
     func resolve(intLiteral: IntLiteralExpression) throws -> AbstractTypeRecord {
-        // TODO: The fundamental types should be defined in the CallingConvention,
-        // which should be passed through to this phase
         return TypeRecord.int
     }
     

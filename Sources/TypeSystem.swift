@@ -66,6 +66,7 @@ class MethodVerifier : TypeVerifier {
     }
 }
 
+
 class TypeUtils {
     static func extractType(fromExpression expression: AbstractExpression) throws -> TypeAnnotation {
         return try TypeChecker.extractAnnotation(fromExpression: expression, annotationType: TypeAnnotation.self)
@@ -95,6 +96,12 @@ public class TypeChecker : CompilationPhase {
     
     public required init(session: OrbitSession, identifier: String = "") {
         self.session = session
+    }
+    
+    static func isAnnotated<T: DebuggableAnnotation>(expression: AbstractExpression, withType: T.Type) -> Bool {
+        let annotations = expression.annotations.filter { $0 is T } as! [T]
+        
+        return annotations.count > 0
     }
     
     static func extractAnnotation<T: DebuggableAnnotation>(fromExpression expression: AbstractExpression, annotationType: T.Type) throws -> T {

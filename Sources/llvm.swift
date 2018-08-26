@@ -11,20 +11,20 @@ import OrbitFrontend
 import LLVM
 
 public class CompContext {
+    private let name: String
     fileprivate let module: Module
     fileprivate let builder: IRBuilder
     fileprivate let phase: LLVMGen
     
     private var types = [String : IRType]()
     private var bindings = [String : IRValue]()
-    private var _builtTypes = [String : IRType]()
-    private var _builtFuncs = [String : Function]()
     
     let llvmGen: LLVMGen
     
     private var hashedNames = [String : String]()
     
     init(name: String, phase: LLVMGen, llvmGen: LLVMGen) {
+        self.name = name
         self.module = Module(name: name)
         self.builder = IRBuilder(module: self.module)
         self.phase = phase
@@ -42,10 +42,8 @@ public class CompContext {
     }
     
     func addFunction(named: String, type: FunctionType) -> Function {
-        guard let fn = self._builtFuncs[named] else {
+        guard let fn = self.module.function(named: named) else {
             let fn = self.builder.addFunction(hash(str: named), type: type)
-            
-            self._builtFuncs[named] = fn
             
             return fn
         }
@@ -54,10 +52,8 @@ public class CompContext {
     }
     
     func createType(named: String, propertyTypes: [IRType]? = nil, isPacked: Bool = true) -> IRType {
-        guard let type = self._builtTypes[named] else {
+        guard let type = self.module.type(named: named) else {
             let type = self.builder.createStruct(name: hash(str: named), types: propertyTypes, isPacked: isPacked)
-            
-            self._builtTypes[named] = type
             
             return type
         }
@@ -89,16 +85,16 @@ public class CompContext {
         self.types[type.fullName] = irType
     }
     
-    func find(type: AbstractTypeRecord) throws -> IRType {
+    func find(type: AbstractTypeRecord, isArrayType: Bool) throws -> IRType {
         if let ir = self.llvmGen.aliasPool[type.fullName] {
-            return ir
+            return isArrayType ? PointerType(pointee: ir) : ir
         }
         
         guard let t = self.types[type.fullName] else {
             throw OrbitError(message: "Type '\(type.fullName)' not defined")
         }
         
-        return t
+        return isArrayType ? PointerType(pointee: t) : t
     }
     
     public func gen() {
@@ -191,7 +187,11 @@ class StaticCallGenerator : IRValueGenerator<StaticCallExpression> {
             throw OrbitError(message: "FATAL Function not defined for name '\(methodName)'")
         }
         
-        let value = context.builder.buildCall(fn, args: [])
+        let args = try expression.args.map {
+            return try ValueGenerator().generate(context: context, expression: $0 as! AbstractExpression)
+        }
+        
+        let value = context.builder.buildCall(fn, args: args)
         
         return value
     }
@@ -199,6 +199,10 @@ class StaticCallGenerator : IRValueGenerator<StaticCallExpression> {
 
 class ReturnGenerator : IRValueGenerator<ReturnStatement> {
     override func generate(context: CompContext, expression: ReturnStatement) throws -> IRValue {
+        let valueType = try TypeUtils.extractType(fromExpression: expression)
+        
+        expression.value.annotate(annotation: valueType)
+        
         let value = try ValueGenerator().generate(context: context, expression: expression.value)
         
         context.builder.buildRet(value)
@@ -272,13 +276,14 @@ class MethodGen : IRValueGenerator<MethodExpression> {
         if let rt = expression.signature.returnType {
             let nt = try TypeUtils.extractType(fromExpression: rt)
             
-            retType = try context.find(type: nt.typeRecord)
+            retType = try context.find(type: nt.typeRecord, isArrayType: rt is ListTypeIdentifierExpression)
         }
         
         let argTypes: [IRType] = try expression.signature.parameters.map {
             let nt = try TypeUtils.extractType(fromExpression: $0)
+            let type = try context.find(type: nt.typeRecord, isArrayType: $0.type is ListTypeIdentifierExpression)
             
-            return try context.find(type: nt.typeRecord)
+            return type
         }
         
         let fnType = FunctionType(argTypes: argTypes, returnType: retType)
@@ -441,6 +446,30 @@ class IRValueAnnotation : DebuggableAnnotation {
     }
 }
 
+/*
+    This is a very rough first attempt at PhaseExtensions
+ */
+
+class PrintIntExtension : PhaseExtension {
+    let extensionName = "Printi"
+    let parameterTypes: [AbstractExpression.Type] = []
+    
+    func execute<T>(phase: T, annotation: AnnotationExpression) throws -> AbstractExpression where T : CompilationPhase {
+        let llvmGen = phase as! LLVMGen
+        let context = llvmGen.currentContext!
+        
+        let ival = try ValueGenerator().generate(context: context, expression: annotation.parameters[0])
+        let fmt = context.builder.buildGlobalString("\(ival)")
+        
+        let putsFn = FunctionType(argTypes: [fmt.type], returnType: IntType(width: 32))
+        let puts = context.builder.addFunction("puts", type: putsFn)
+        
+        _ = context.builder.buildCall(puts, args: [fmt])
+        
+        return annotation
+    }
+}
+
 class InsertAddExtension : PhaseExtension {
     let extensionName: String = "Add"
     let parameterTypes: [AbstractExpression.Type] = [IdentifierExpression.self, IdentifierExpression.self]
@@ -477,6 +506,24 @@ class InsertUnaryMinusExtension : PhaseExtension {
     }
 }
 
+public class OrbitAPIAnnotation : DebuggableAnnotation {
+    public let identifier = "Orb.Compiler.Backend.LLVM.OrbitAPIAnnotation"
+    
+    let apis: [OrbitAPI]
+    
+    init(apis: [OrbitAPI]) {
+        self.apis = apis
+    }
+    
+    public func equal(toOther annotation: Annotation) -> Bool {
+        return self.identifier == annotation.identifier
+    }
+    
+    public func dump() -> String {
+        return "@OrbitAPI -> \(apis)"
+    }
+}
+
 public class LLVMGen : CompilationPhase {
     public typealias InputType = (RootExpression, [APIMap])
     public typealias OutputType = [OrbitAPI]
@@ -492,7 +539,8 @@ public class LLVMGen : CompilationPhase {
         EntryPointExtension.identifier: EntryPointExtension(),
         IntegerAliasExtension.identifier: IntegerAliasExtension(),
         FloatAliasExtension.identifier: FloatAliasExtension(),
-        "Add": InsertAddExtension()
+        "Add": InsertAddExtension(),
+        "Printi": PrintIntExtension()
     ]
     
     public required init(session: OrbitSession, identifier: String = "") {
@@ -507,24 +555,32 @@ public class LLVMGen : CompilationPhase {
             let apiGen = APIGen(name: nodeType.typeRecord.fullName)
             let context = CompContext(name: nodeType.typeRecord.fullName, phase: self, llvmGen: self)
             
+            if TypeChecker.isAnnotated(expression: api, withType: OrbitAPIAnnotation.self) {
+                let libs = try TypeChecker.extractAnnotation(fromExpression: api, annotationType: OrbitAPIAnnotation.self).apis
+                
+                libs.forEach { lib in
+                    _ = context.module.link(lib.context.module)
+                }
+            }
+            
             self.currentContext = context
             
-            try input.1.forEach { apiMap in
+            input.1.forEach { apiMap in
                 apiMap.exportedTypes.filter { $0.isImported }.forEach { xType in
                     let type = context.createType(named: xType.fullName)
                     context.declare(type: xType, irType: type)
                 }
 
-                try apiMap.exportedMethods.filter { $0.isImported }.forEach { xSig in
-                    let irArgs = try xSig.args.map { a in
-                        return try context.find(type: a)
-                    }
-
-                    let irRet = try context.find(type: xSig.ret)
-
-                    let fnType = FunctionType(argTypes: irArgs, returnType: irRet)
-                    _ = context.addFunction(named: xSig.fullName, type: fnType)
-                }
+//                try apiMap.exportedMethods.filter { $0.isImported }.forEach { xSig in
+//                    let irArgs = try xSig.args.map { a in
+//                        return try context.find(type: a)
+//                    }
+//
+//                    let irRet = try context.find(type: xSig.ret)
+//
+//                    let fnType = FunctionType(argTypes: irArgs, returnType: irRet)
+//                    _ = context.addFunction(named: xSig.fullName, type: fnType)
+//                }
             }
             
             return try apiGen.generate(context: context, expression: api)

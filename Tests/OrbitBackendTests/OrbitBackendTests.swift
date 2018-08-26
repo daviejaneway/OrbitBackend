@@ -55,7 +55,7 @@ class OrbitBackendTests : XCTestCase {
         let source = SourceResolver(session: session)
 //        let bundle = Bundle(for: type(of: self))
 //        let path = bundle.path(forResource: testFileName, ofType: "orb")!
-        let code = try source.execute(input: "/Users/davie/dev/other/Orb/T2.orb") //path)
+        let code = try source.execute(input: "/Users/davie/dev/other/Orb/T3.orb") //path)
         
         let lexer = Lexer(session: session)
         let annotationTokens = try lexer.execute(input: code)
