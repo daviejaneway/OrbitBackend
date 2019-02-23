@@ -87,12 +87,18 @@ class TypeUtils {
     }
 }
 
-public class TypeChecker : CompilationPhase {
+public class TypeChecker : ExtendablePhase {
+    public var phaseName: String { return self.identifier }
+    
     public typealias InputType = RootExpression
     public typealias OutputType = RootExpression
     
     public let identifier = "Orb::Compiler::Backend::TypeChecker"
     public let session: OrbitSession
+    
+    public let extensions: [String : PhaseExtension] = [
+        "Special" : Specialisation()
+    ]
     
     public required init(session: OrbitSession, identifier: String = "") {
         self.session = session

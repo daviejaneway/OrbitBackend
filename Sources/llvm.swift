@@ -133,6 +133,29 @@ class RealLiteralGenerator : IRValueGenerator<RealLiteralExpression> {
     }
 }
 
+class ListLiteralGenerator : IRValueGenerator<ListLiteralExpression> {
+    override func generate(context: CompContext, expression: ListLiteralExpression) throws -> IRValue {
+        guard let genericType = try TypeUtils.extractType(fromExpression: expression).typeRecord as? GenericTypeRecord else { throw OrbitError(message: "FATAL Expected generic type") }
+        
+        // TODO - Support empty list
+        guard genericType.typeParameters.count > 0 else { throw OrbitError(message: "FATAL empty list is unsupported") }
+        
+        //let baseType = try context.find(type: genericType.baseType, isArrayType: false)
+        let elementType = try context.find(type: genericType.typeParameters[0], isArrayType: false)
+        
+        let ptr = ArrayType(elementType: elementType, count: expression.value.count).null()
+        
+        //let ptr = context.builder.buildAlloca(type: arrayType)
+        
+        let valueGen = ValueGenerator()
+        let values = try (expression.value as! [AbstractExpression]).map { try valueGen.generate(context: context, expression: $0) }
+        
+        values.enumerated().forEach { context.builder.buildInsertElement(vector: ptr, element: $0.element, index: IntType(width: 8).constant($0.offset)) }
+        
+        return ptr
+    }
+}
+
 class ReferenceGenerator : IRValueGenerator<IdentifierExpression> {
     override func generate(context: CompContext, expression: IdentifierExpression) throws -> IRValue {
         return try context.lookup(bindingNamed: expression.value)
@@ -169,6 +192,7 @@ class ValueGenerator : IRValueGenerator<AbstractExpression> {
                 let ir = try TypeChecker.extractAnnotation(fromExpression: result, annotationType: IRValueAnnotation.self)
                 
                 return ir.value
+            case is ListLiteralExpression: return try ListLiteralGenerator().generate(context: context, expression: expression as! ListLiteralExpression)
             
             default: throw OrbitError(message: "Expected Value expression, found \(expression)")
         }
@@ -362,7 +386,7 @@ class APIGen : AbstractLLVMGenerator<APIExpression, OrbitAPI> {
 }
 
 /// Inserts a main method that can be called by the LLVM toolchain
-    class EntryPointExtension : PhaseExtension {
+class EntryPointExtension : PhaseExtension {
     static let identifier = "LLVM.EntryPoint"
     let extensionName = EntryPointExtension.identifier
     let parameterTypes: [AbstractExpression.Type] = []
@@ -570,17 +594,6 @@ public class LLVMGen : CompilationPhase {
                     let type = context.createType(named: xType.fullName)
                     context.declare(type: xType, irType: type)
                 }
-
-//                try apiMap.exportedMethods.filter { $0.isImported }.forEach { xSig in
-//                    let irArgs = try xSig.args.map { a in
-//                        return try context.find(type: a)
-//                    }
-//
-//                    let irRet = try context.find(type: xSig.ret)
-//
-//                    let fnType = FunctionType(argTypes: irArgs, returnType: irRet)
-//                    _ = context.addFunction(named: xSig.fullName, type: fnType)
-//                }
             }
             
             return try apiGen.generate(context: context, expression: api)

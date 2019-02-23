@@ -62,6 +62,7 @@ public class TypeRecord : AbstractTypeRecord, APIMapImportable {
     static let int = TypeRecord(shortName: "Int", fullName: "Orb.Core.Types.Int")
     static let real = TypeRecord(shortName: "Real", fullName: "Orb.Core.Types.Real")
     static let op = TypeRecord(shortName: "Operator", fullName: "Orb.Core.Operators.Operator")
+    static let list = TypeRecord(shortName: "List", fullName: "Orb.Core.Types.Collections.List")
     
     public class func `import`<T>(body: JSON, type: T.Type) throws -> T {
         let body = body["body"]
@@ -75,7 +76,37 @@ public class TypeRecord : AbstractTypeRecord, APIMapImportable {
     }
 }
 
-public class ListTypeRecord : AbstractTypeRecord {}
+public class GenericTypeRecord : AbstractTypeRecord {
+    let baseType: AbstractTypeRecord
+    let typeParameters: [AbstractTypeRecord]
+    
+    init(baseType: AbstractTypeRecord, typeParameters: [AbstractTypeRecord]) {
+        self.typeParameters = typeParameters
+        self.baseType = baseType
+        
+        let sName = "\(baseType.shortName).\(typeParameters.map { $0.shortName }.joined(separator: "."))"
+        let fName = "\(baseType.fullName).\(typeParameters.map { $0.fullName }.joined(separator: "."))"
+        
+        super.init(shortName: sName, fullName: fName)
+    }
+}
+
+public class AbstractListTypeRecord : AbstractTypeRecord {}
+
+//public class ListTypeRecord : AbstractListTypeRecord, GenericTypeRecord {
+//    public let typeParameters: [AbstractTypeRecord]
+//
+//    init(elementType: AbstractTypeRecord) {
+//        self.typeParameters = [elementType]
+//        super.init(shortName: "List.\(elementType.shortName)", fullName: "Orb.Core.Types.Collections.List.\(elementType.fullName)")
+//    }
+//}
+//
+//public class EmptyListTypeRecord : AbstractListTypeRecord {
+//    init() {
+//        super.init(shortName: "List", fullName: "Orb.Core.Types.Collections.List")
+//    }
+//}
 
 public class SignatureTypeRecord : AbstractTypeRecord, APIMapImportable {
     private static let API_MAP_KEY_NAME = "name"
@@ -514,6 +545,33 @@ class AliasTypeExtension : PhaseExtension {
     }
 }
 
+public class Specialisation : PhaseExtension {
+    public let extensionName = "Special"
+    
+    public let parameterTypes = [AbstractExpression.Type]()
+    
+    public func execute<T>(phase: T, annotation: AnnotationExpression) throws -> AbstractExpression where T : CompilationPhase {
+        // TODO - Good errors
+        let genericTypeId = annotation.parameters[0] as! TypeIdentifierExpression
+        let scope = try TypeUtils.extractScope(fromExpression: annotation)
+        let genericType = try scope.scope.findType(named: genericTypeId.value)
+        
+        // TODO - Check genericType is actually generic
+        // TODO - Check number of params matchs expected number of type parameters for genericType
+        let specialTypes = try annotation.parameters[1...].map { try scope.scope.findType(named: ($0 as! TypeIdentifierExpression).value) }
+        
+        let specialised = GenericTypeRecord(baseType: genericType, typeParameters: specialTypes)
+        
+        scope.scope.declare(type: specialised)
+        
+        let typeDef = TypeDefExpression(name: TypeIdentifierExpression(value: specialised.fullName, startToken: annotation.startToken), properties: [], propertyOrder: [:], constructorSignatures: [], adoptedTraits: [], startToken: annotation.startToken)
+        
+        typeDef.annotate(annotation: TypeAnnotation(typeRecord: specialised))
+        
+        return typeDef
+    }
+}
+
 public class TypeResolver : ExtendablePhase {
     public typealias InputType = (RootExpression, [APIMap])
     public typealias OutputType = RootExpression
@@ -523,7 +581,8 @@ public class TypeResolver : ExtendablePhase {
     public let session: OrbitSession
     
     public var extensions: [String : PhaseExtension] = [
-        "Orb.Compiler.Backend.TypeResolver.AliasType": AliasTypeExtension()
+        "Orb.Compiler.Backend.TypeResolver.AliasType": AliasTypeExtension(),
+        "Special": Specialisation()
     ]
     
     public required init(session: OrbitSession, identifier: String = "") {
@@ -534,7 +593,7 @@ public class TypeResolver : ExtendablePhase {
         var type: AbstractTypeRecord = try scope.findType(named: typeId.value)
         
         if typeId is ListTypeIdentifierExpression {
-            type = ListTypeRecord(shortName: type.shortName, fullName: type.fullName)
+            type = GenericTypeRecord(baseType: TypeRecord.list, typeParameters: [type])
         }
         
         typeId.annotate(annotation: TypeAnnotation(typeRecord: type))
@@ -569,6 +628,14 @@ public class TypeResolver : ExtendablePhase {
     
     func resolve(realLiteral: RealLiteralExpression) throws -> AbstractTypeRecord {
         return TypeRecord.real
+    }
+    
+    func resolve(listLiteral: ListLiteralExpression, scope: Scope) throws -> AbstractTypeRecord {
+        let innerTypes = try listLiteral.value.map { try resolve(value: $0 as! RValueExpression, scope: scope) }
+        
+        // TODO - Product types
+        
+        return GenericTypeRecord(baseType: TypeRecord.list, typeParameters: innerTypes)
     }
     
     func resolve(unary: UnaryExpression, scope: Scope) throws -> AbstractTypeRecord {
@@ -682,6 +749,7 @@ public class TypeResolver : ExtendablePhase {
             case is UnaryExpression: return try resolve(unary: value as! UnaryExpression, scope: scope)
             case is BinaryExpression: return try resolve(binary: value as! BinaryExpression, scope: scope)
             case is AnnotationExpression: return try resolve(annotation: value as! AnnotationExpression, scope: scope)
+            case is ListLiteralExpression: return try resolve(listLiteral: value as! ListLiteralExpression, scope: scope)
             
             default: throw OrbitError(message: "Could not resolve type of expression: \(value)")
         }
@@ -768,10 +836,10 @@ public class TypeResolver : ExtendablePhase {
         try methods.forEach { try resolve(method: $0, scope: scope) }
         
         let annotations = api.body.filter { $0 is AnnotationExpression } as! [AnnotationExpression]
-        try annotations.forEach { try resolve(annotation: $0, scope: scope) }
+        try annotations.forEach { _ = try resolve(annotation: $0, scope: scope) }
         
-        try annotations.filter { $0.annotationName.value.starts(with: self.identifier) }.forEach { ann in
-            guard let ext = self.extensions[ann.annotationName.value] else { throw OrbitError(message: "No extension named \(ann.annotationName.value) found for Phase \(self.identifier)") }
+        try annotations.forEach { ann in
+            guard let ext = self.extensions[ann.annotationName.value] else { return }
             
             let result = try ext.execute(phase: self, annotation: ann)
             

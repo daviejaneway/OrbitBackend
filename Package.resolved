@@ -6,8 +6,8 @@
         "repositoryURL": "https://github.com/llvm-swift/cllvm.git",
         "state": {
           "branch": null,
-          "revision": "f85b813d7c2952ffc4cb0c46f905986d12935362",
-          "version": "0.0.6"
+          "revision": "e3b750e75df1c33ddb1e1d391c6c78640baf404f",
+          "version": "0.0.7"
         }
       },
       {
@@ -42,8 +42,8 @@
         "repositoryURL": "https://github.com/daviejaneway/OrbitFrontend.git",
         "state": {
           "branch": null,
-          "revision": "2c04d26664b4618ba6bfa6a31192dde363a0f5e5",
-          "version": "0.0.86"
+          "revision": "044170659d2803de1f88bd1401dfe4325efe2cd6",
+          "version": "0.0.87"
         }
       },
       {
@@ -51,8 +51,8 @@
         "repositoryURL": "https://github.com/SwiftyJSON/SwiftyJSON.git",
         "state": {
           "branch": null,
-          "revision": "ebfc0d7e314f15c1df02fcb198beb40624421839",
-          "version": "4.1.0"
+          "revision": "184c6884998c41f71a73c459f9b525b7121be846",
+          "version": "4.2.0"
         }
       }
     ]
