@@ -150,7 +150,7 @@ class ListLiteralGenerator : IRValueGenerator<ListLiteralExpression> {
         let valueGen = ValueGenerator()
         let values = try (expression.value as! [AbstractExpression]).map { try valueGen.generate(context: context, expression: $0) }
         
-        values.enumerated().forEach { context.builder.buildInsertElement(vector: ptr, element: $0.element, index: IntType(width: 8).constant($0.offset)) }
+        values.enumerated().forEach { _ = context.builder.buildInsertElement(vector: ptr, element: $0.element, index: IntType(width: 8).constant($0.offset)) }
         
         return ptr
     }
@@ -177,6 +177,18 @@ class InfixGenerator : IRValueGenerator<BinaryExpression> {
     }
 }
 
+class ConstructorGenerator : IRValueGenerator<ConstructorCallExpression> {
+    override func generate(context: CompContext, expression: ConstructorCallExpression) throws -> IRValue {
+        let typeRecord = try TypeUtils.extractType(fromExpression: expression).typeRecord
+        let type = try context.find(type: typeRecord, isArrayType: false)
+        let alloca = context.builder.buildAlloca(type: type)
+        
+        // TODO - Set constructor param values
+        
+        return alloca
+    }
+}
+
 class ValueGenerator : IRValueGenerator<AbstractExpression> {
     override func generate(context: CompContext, expression: AbstractExpression) throws -> IRValue {
         switch expression {
@@ -193,6 +205,8 @@ class ValueGenerator : IRValueGenerator<AbstractExpression> {
                 
                 return ir.value
             case is ListLiteralExpression: return try ListLiteralGenerator().generate(context: context, expression: expression as! ListLiteralExpression)
+            
+            case is ConstructorCallExpression: return try ConstructorGenerator().generate(context: context, expression: expression as! ConstructorCallExpression)
             
             default: throw OrbitError(message: "Expected Value expression, found \(expression)")
         }

@@ -5,4 +5,12 @@ api A with Orb::Core {
     (self Foo) bar (b Orb::Core::Bar) () {
         return 10
     }
+
+    @LLVM::EntryPoint(
+    (self Main) main () (Int32) {
+        f = Foo()
+        b = Bar()
+        f.bar(b)
+        return 0
+    })
 }

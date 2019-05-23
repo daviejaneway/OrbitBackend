@@ -113,6 +113,10 @@ public class TypeChecker : ExtendablePhase {
     static func extractAnnotation<T: DebuggableAnnotation>(fromExpression expression: AbstractExpression, annotationType: T.Type) throws -> T {
         let annotations = expression.annotations.filter { $0 is T } as! [T]
         
+        guard annotations.count > 0 else {
+            throw OrbitError(message: "FATAL: Expression type has not been resolved: \(expression)")
+        }
+        
         guard annotations.count == 1 else {
             throw OrbitError(message: "FATAL: Multiple annotations found \(expression)")
         }

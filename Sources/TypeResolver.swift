@@ -10,6 +10,8 @@ import OrbitFrontend
 import OrbitCompilerUtils
 import SwiftyJSON
 
+extension ConstructorCallExpression : RValueExpression {}
+
 extension PhaseAnnotation {
     public init(expression: AnnotationExpression, identifier: String) {
         self.annotationExpression = expression
@@ -70,9 +72,21 @@ public class TypeRecord : AbstractTypeRecord, APIMapImportable {
         guard let fname = body[AbstractTypeRecord.API_MAP_KEY_FULL_NAME].string else {
             throw OrbitError.missingAPIMapKey(key: AbstractTypeRecord.API_MAP_KEY_FULL_NAME)
         }
-        guard let sname = body[AbstractTypeRecord.API_MAP_KEY_SHORT_NAME].string else { throw OrbitError.missingAPIMapKey(key: AbstractTypeRecord.API_MAP_KEY_SHORT_NAME) }
+        
+        guard let sname = body[AbstractTypeRecord.API_MAP_KEY_SHORT_NAME].string else {
+            throw OrbitError.missingAPIMapKey(key: AbstractTypeRecord.API_MAP_KEY_SHORT_NAME)
+        }
         
         return TypeRecord(shortName: sname, fullName: fname) as! T
+    }
+}
+
+public class CompoundTypeRecord : TypeRecord {
+    public let memberTypes: [AbstractTypeRecord]
+    
+    public init(shortName: String, fullName: String, memberTypes: [AbstractTypeRecord]) {
+        self.memberTypes = memberTypes
+        super.init(shortName: shortName, fullName: fullName)
     }
 }
 
@@ -174,9 +188,13 @@ public class MethodTypeRecord : AbstractTypeRecord {
     }
 }
 
-public struct TypeAnnotation : DebuggableAnnotation {
+public class TypeAnnotation : DebuggableAnnotation {
     public let typeRecord: AbstractTypeRecord
     public let identifier = "Orb.Compiler.Backend.Annotations.Type"
+    
+    init(typeRecord: AbstractTypeRecord) {
+        self.typeRecord = typeRecord
+    }
     
     public func equal(toOther annotation: Annotation) -> Bool {
         guard let other = annotation as? TypeAnnotation else { return false }
@@ -187,6 +205,19 @@ public struct TypeAnnotation : DebuggableAnnotation {
     
     public func dump() -> String {
         return "@Type -> \(self.typeRecord.fullName)"
+    }
+}
+
+public class CompoundTypeAnnotation : TypeAnnotation {
+    public let memberTypes: [TypeAnnotation]
+    
+    init(typeRecord: AbstractTypeRecord, memberTypes: [TypeAnnotation]) {
+        self.memberTypes = memberTypes
+        super.init(typeRecord: typeRecord)
+    }
+    
+    public override func dump() -> String {
+        return "@Type -> \(self.typeRecord.fullName)(\(self.memberTypes.map { $0.dump() }.joined(separator: ",")))"
     }
 }
 
@@ -403,7 +434,17 @@ public class TypeExtractor : ExtendablePhase {
         try typeDefs.forEach { td in
             let qualifiedName = "\(apiMap.canonicalName).\(td.name.value)"
             
-            let tr = TypeRecord(shortName: td.name.value, fullName: qualifiedName)
+            let propertyTypes = try td.properties.map { pair in
+                return try findType(named: pair.type.value)
+            }
+            
+            let tr: TypeRecord
+            
+            if propertyTypes.isEmpty {
+                tr = TypeRecord(shortName: td.name.value, fullName: qualifiedName)
+            } else {
+                tr = CompoundTypeRecord(shortName: td.name.value, fullName: qualifiedName, memberTypes: propertyTypes)
+            }
             
             if self.types.contains(tr) {
                 throw OrbitError(message: "Duplicate type: \(td.name.value)")
@@ -613,13 +654,17 @@ public class TypeResolver : ExtendablePhase {
     }
     
     func resolve(typeDef: TypeDefExpression, scope: Scope, apiName: String) throws {
-        let type = TypeRecord(shortName: typeDef.name.value, fullName: "\(apiName).\(typeDef.name.value)")
+        let memberTypes: [AbstractTypeRecord] = try typeDef.properties.map { pair in
+            let typeRecord = try self.resolve(pair: pair, scope: scope)
+            
+            pair.annotate(annotation: TypeAnnotation(typeRecord: typeRecord))
+            
+            return typeRecord
+        }
+        
+        let type = try self.resolve(typeId: typeDef.name, scope: scope)
         
         typeDef.annotate(annotation: TypeAnnotation(typeRecord: type))
-        
-        try typeDef.properties.forEach { pair in
-            _ = try resolve(pair: pair, scope: scope)
-        }
     }
     
     func resolve(intLiteral: IntLiteralExpression) throws -> AbstractTypeRecord {
@@ -686,7 +731,7 @@ public class TypeResolver : ExtendablePhase {
             let ignore = assignment.value is AnnotationExpression
             
             if !ignore && rhs != type {
-                throw OrbitError(message: "Assignment declares '\(assignment.name.value)' to be of type '\(type.fullName)', but right-hand side value is of type '\(rhs.fullName)'")
+                throw OrbitError(message: "Assignment declares '\(assignment.name.value)' of type '\(type.fullName)', but right-hand side value is type '\(rhs.fullName)'")
             }
             
             assignment.annotate(annotation: TypeAnnotation(typeRecord: type))
@@ -739,6 +784,39 @@ public class TypeResolver : ExtendablePhase {
         return type
     }
     
+    func resolve(constructor: ConstructorCallExpression, scope: Scope) throws -> AbstractTypeRecord {
+        let type = try self.resolve(typeId: constructor.receiver, scope: scope)
+        
+        let argTypes: [AbstractTypeRecord] = try constructor.args.map { arg in
+            let value = try self.resolve(value: arg, scope: scope)
+            
+            (arg as! AbstractExpression).annotate(annotation: TypeAnnotation(typeRecord: value))
+            
+            return value
+        }
+        
+        if let comp = type as? CompoundTypeRecord {
+            // Type check parameters
+            guard comp.memberTypes.count == argTypes.count else {
+                throw OrbitError(message: "Constructor for type '\(comp.fullName)' expects \(comp.memberTypes.count) parameter(s), found \(constructor.args.count)")
+            }
+            
+            // Ensure each param is expected type
+            let zipped = zip(comp.memberTypes, argTypes)
+            
+            // TODO - Named parameters instead of positional
+            try zipped.enumerated().forEach { item in
+                guard TypeChecker.checkEquality(typeA: item.element.0, typeB: item.element.1) else {
+                    throw OrbitError(message: "Expected parameter of type '\(item.element.0.fullName)' in constructor call at position \(item.offset)")
+                }
+            }
+        }
+        
+        constructor.annotate(annotation: TypeAnnotation(typeRecord: type))
+        
+        return type
+    }
+    
     func resolve(value: RValueExpression, scope: Scope) throws -> AbstractTypeRecord {
         switch value {
             case is IntLiteralExpression: return try resolve(intLiteral: value as! IntLiteralExpression)
@@ -750,6 +828,7 @@ public class TypeResolver : ExtendablePhase {
             case is BinaryExpression: return try resolve(binary: value as! BinaryExpression, scope: scope)
             case is AnnotationExpression: return try resolve(annotation: value as! AnnotationExpression, scope: scope)
             case is ListLiteralExpression: return try resolve(listLiteral: value as! ListLiteralExpression, scope: scope)
+            case is ConstructorCallExpression: return try resolve(constructor: value as! ConstructorCallExpression, scope: scope)
             
             default: throw OrbitError(message: "Could not resolve type of expression: \(value)")
         }
